@@ -19,7 +19,7 @@ jobs:
           arch: 'gcc_64'
           
       - name: Install Build Tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential wget libgl1-mesa-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential wget libgl1-mesa-dev libxcb-cursor0
           
       - name: Build Linux AppImage
         run: |
