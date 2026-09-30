@@ -26,18 +26,36 @@ jobs:
           qmake ThemisLinux.pro
           make -j$(nproc)
           
-          # Use linuxdeployqt to package
-          wget -c "https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage" -O linuxdeployqt
-          chmod a+x linuxdeployqt
+          # Use linuxdeploy (modern alternative to linuxdeployqt which fails on Ubuntu 24.04)
+          wget -c "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+          wget -c "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
+          chmod +x linuxdeploy*.AppImage
+          
+          # Setup AppDir
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp ThemisLinux AppDir/usr/bin/
+          cp themis_logo.png AppDir/usr/share/icons/hicolor/256x256/apps/ThemisLinux.png
+          
+          cat << 'DESKTOP' > AppDir/usr/share/applications/ThemisLinux.desktop
+          [Desktop Entry]
+          Name=ThemisLinux
+          Exec=ThemisLinux
+          Icon=ThemisLinux
+          Type=Application
+          Categories=Development;Education;
+          DESKTOP
+          
+          export QMAKE=$(which qmake)
+          export OUTPUT=ThemisLinux.AppImage
           export VERSION=$(git describe --tags --always 2>/dev/null || echo "1.0")
-          ./linuxdeployqt ThemisLinux -appimage -unsupported-allow-new-glibc -qmake=$(which qmake)
-          mv ThemisLinux-*-x86_64.AppImage ThemisLinux.AppImage
+          
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
           
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ThemisLinux.AppImage
-          path: ThemisLinux.AppImage
+          path: ThemisLinux*.AppImage
 
   build-windows:
     runs-on: windows-latest
@@ -49,6 +67,8 @@ jobs:
         with:
           version: '6.5.3'
           arch: 'win64_mingw'
+          # Use specific mirror if the default one is flaky
+          mirror: 'http://mirrors.ocf.berkeley.edu/qt/'
           
       - name: Build Windows
         run: |
@@ -97,7 +117,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            ThemisLinux.AppImage
+            ThemisLinux*.AppImage
             Themis-Windows.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
