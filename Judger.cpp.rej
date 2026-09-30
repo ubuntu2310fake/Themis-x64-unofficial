@@ -1,0 +1,16 @@
+--- Judger.cpp
++++ Judger.cpp
+@@ -6,11 +6,13 @@
+ #include <QElapsedTimer>
+ #include <QThread>
+ 
++#ifndef Q_OS_WIN
+ #include <sys/types.h>
+ #include <sys/wait.h>
+ #include <sys/time.h>
+ #include <sys/resource.h>
+ #include <unistd.h>
++#endif
+ 
+ // ── Helpers ───────────────────────────────────────────────────────────────────
+ static bool compareFiles(const QString &fileA, const QString &fileB,

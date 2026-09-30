@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=ThemisLinux
+Exec=ThemisLinux
+Icon=ThemisLinux
+Categories=Development;
+X-AppImage-Version=1.0

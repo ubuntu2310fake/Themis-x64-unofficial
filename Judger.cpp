@@ -1,0 +1,346 @@
+#include <QCoreApplication>
+#include "Judger.h"
+#include <QProcess>
+#include <QFile>
+#include <QDir>
+#include <QTextStream>
+#include <QElapsedTimer>
+
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <errno.h>
+#endif
+#include <time.h>
+
+// ─── Compile ─────────────────────────────────────────────────────────────────
+bool Judger::compile(const QString &sourceFile,
+                     const QString &outputExe,
+                     const CompilerEntry &entry,
+                     const QString &taskName,
+                     QString &ceLog)
+{
+    // Python or ELF: no compilation needed
+    if (entry.ext == ".py" || entry.ext.isEmpty()) {
+        ceLog.clear();
+        return true;
+    }
+    // Comment rows (;...) = no compile needed
+    if (entry.command.startsWith(';')) {
+        ceLog.clear();
+        return true;
+    }
+
+    // Build source directory path (with trailing slash)
+    QFileInfo fi(sourceFile);
+    QString pathDir = fi.absolutePath() + "/";   // %PATH%
+    QString ext     = fi.suffix().isEmpty() ? "" : "." + fi.suffix(); // %EXT%
+
+    // Replace Themis variables
+    QString cmd = entry.command;
+    cmd.replace("%APPDIR%", QCoreApplication::applicationDirPath(), Qt::CaseInsensitive);
+    cmd.replace("%PATH%", pathDir, Qt::CaseInsensitive);
+    cmd.replace("%NAME%", taskName, Qt::CaseInsensitive);
+    cmd.replace("%EXT%",  ext,      Qt::CaseInsensitive);
+
+    // Handle Java @WorkDir= annotation
+    QString workDir;
+    if (cmd.contains("|@WorkDir=")) {
+        int idx = cmd.indexOf("|@WorkDir=");
+        workDir = cmd.mid(idx + 10).remove('"');
+        cmd     = cmd.left(idx);
+    }
+
+    // Split into argv[0] + args
+    QStringList parts = QProcess::splitCommand(cmd);
+    if (parts.isEmpty()) { ceLog = "Empty compile command"; return false; }
+
+    QProcess proc;
+    if (!workDir.isEmpty()) proc.setWorkingDirectory(workDir);
+    proc.setProcessChannelMode(QProcess::MergedChannels);
+    proc.start(parts[0], parts.mid(1));
+
+    if (!proc.waitForFinished(30000)) {  // 30s compile timeout
+        proc.kill();
+        ceLog = "Compiler timed out";
+        return false;
+    }
+
+    ceLog = QString::fromLocal8Bit(proc.readAllStandardOutput());
+    return (proc.exitCode() == 0);
+}
+
+// ─── Execute one test ─────────────────────────────────────────────────────────
+#ifndef Q_OS_WIN
+TestResult Judger::execute(const QString &exeFile,
+                           const QString &workDir,
+                           const QString &inputFile,
+                           const QString &actualOutputFile,
+                           bool useStdIn,
+                           bool useStdOut,
+                           double timeLimitSec,
+                           int    memLimitMb,
+                           const QString &interpreter)
+{
+    TestResult res;
+    res.verdict = Verdict::RTE;
+
+    int fdIn = -1, fdOut = -1;
+    if (useStdIn) {
+        fdIn = open(inputFile.toLocal8Bit().constData(), O_RDONLY);
+    } else {
+        fdIn = open("/dev/null", O_RDONLY); // Provide dummy stdin
+    }
+
+    if (useStdOut) {
+        fdOut = open(actualOutputFile.toLocal8Bit().constData(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    } else {
+        fdOut = open("/dev/null", O_WRONLY); // Discard stdout if not used
+    }
+
+    if (fdIn < 0 || fdOut < 0) {
+        if (fdIn  >= 0) close(fdIn);
+        if (fdOut >= 0) close(fdOut);
+        res.verdict = Verdict::IE;
+        res.checkerMsg = "Cannot open I/O files";
+        return res;
+    }
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fdIn); close(fdOut);
+        res.verdict = Verdict::IE;
+        return res;
+    }
+
+    if (pid == 0) {
+        // ── Child process ─────────────────────────────────────────────────
+        if (!workDir.isEmpty()) {
+            if (chdir(workDir.toLocal8Bit().constData()) != 0) {
+                _exit(127);
+            }
+        }
+
+        dup2(fdIn,  STDIN_FILENO);
+        dup2(fdOut, STDOUT_FILENO);
+
+        // Redirect stderr to /dev/null
+        int devNull = open("/dev/null", O_WRONLY);
+        if (devNull >= 0) dup2(devNull, STDERR_FILENO);
+
+        close(fdIn); close(fdOut);
+
+        // CPU time limit
+        struct rlimit rl;
+        rl.rlim_cur = (rlim_t)(timeLimitSec + 2); // +2s grace
+        rl.rlim_max = rl.rlim_cur + 1;
+        setrlimit(RLIMIT_CPU, &rl);
+
+        // Virtual memory limit (address space)
+        if (memLimitMb > 0) {
+            rl.rlim_cur = (rlim_t)memLimitMb * 1024 * 1024;
+            rl.rlim_max = rl.rlim_cur;
+            setrlimit(RLIMIT_AS, &rl);
+        }
+
+        // Stack limit (256 MB)
+        rl.rlim_cur = 256ULL * 1024 * 1024;
+        rl.rlim_max = rl.rlim_cur;
+        setrlimit(RLIMIT_STACK, &rl);
+
+        // Execute
+        if (!interpreter.isEmpty()) {
+            execl(interpreter.toLocal8Bit().constData(),
+                  interpreter.toLocal8Bit().constData(),
+                  exeFile.toLocal8Bit().constData(), nullptr);
+        } else {
+            execl(exeFile.toLocal8Bit().constData(),
+                  exeFile.toLocal8Bit().constData(), nullptr);
+        }
+        _exit(127); // exec failed
+    }
+
+    // ── Parent: wait with wall-clock timeout ──────────────────────────────
+    close(fdIn); close(fdOut);
+
+    int timeoutMs  = (int)(timeLimitSec * 1000.0);
+    int elapsed    = 0;
+    int status     = 0;
+    bool timedOut  = false;
+    struct rusage ru;
+
+    while (elapsed < timeoutMs) {
+        int r = wait4(pid, &status, WNOHANG, &ru);
+        if (r == pid) break;
+        if (r < 0) break;
+        usleep(5000); // 5ms poll for better precision
+        elapsed += 5;
+        if (elapsed >= timeoutMs) { timedOut = true; break; }
+    }
+
+    if (timedOut) {
+        kill(pid, SIGKILL);
+        wait4(pid, &status, 0, &ru);
+    }
+
+    double cpuMs = (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 1000.0 +
+                   (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 1000.0;
+
+    // Use cpuMs if non-zero, else wall-clock
+    if (cpuMs > 0.0 && !timedOut) {
+        res.timeMs = cpuMs;
+    } else {
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        res.timeMs = (t1.tv_sec - t0.tv_sec) * 1000.0 + (t1.tv_nsec - t0.tv_nsec) / 1000000.0;
+        // If we timed out, clamp timeMs to exactly timeLimit to match "đúng 1s là cắt" request
+        if (res.timeMs >= timeoutMs) res.timeMs = timeoutMs;
+    }
+
+    res.memKb = ru.ru_maxrss; // KB on Linux for specific child process
+
+    // Determine verdict
+    if (timedOut || res.timeMs >= timeLimitSec * 1000.0) {
+        res.verdict = Verdict::TLE;
+    } else if (res.memKb > (long)memLimitMb * 1024) {
+        res.verdict = Verdict::MLE;
+    } else if (WIFSIGNALED(status)) {
+        int sig = WTERMSIG(status);
+        if (sig == SIGXCPU) res.verdict = Verdict::TLE;
+        else                 res.verdict = Verdict::RTE;
+        res.checkerMsg = QString("Signal %1").arg(sig);
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        res.verdict = Verdict::RTE;
+        res.checkerMsg = QString("Exit code %1").arg(WEXITSTATUS(status));
+    } else {
+        res.verdict = Verdict::Judging; // needs output check
+    }
+
+    return res;
+}
+#endif
+
+// ─── Output Check ─────────────────────────────────────────────────────────────
+static QStringList tokenize(const QString &text, bool lines)
+{
+    QStringList result;
+    if (lines) {
+        for (const QString &line : text.split('\n', Qt::KeepEmptyParts)) {
+            QString trimmed = line.trimmed();
+            if (!trimmed.isEmpty())
+                result << trimmed;
+        }
+    } else {
+        for (const QString &tok : text.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts))
+            result << tok;
+    }
+    return result;
+}
+
+static QString readFile(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
+    return QString::fromLocal8Bit(f.readAll());
+}
+
+double Judger::checkLinesWords(const QString &expPath, const QString &actPath,
+                                bool caseSensitive)
+{
+    QString exp = readFile(expPath).trimmed();
+    QString act = readFile(actPath).trimmed();
+
+    QStringList expLines = exp.split('\n', Qt::SkipEmptyParts);
+    QStringList actLines = act.split('\n', Qt::SkipEmptyParts);
+
+    if (expLines.size() != actLines.size()) return 0.0;
+
+    for (int i = 0; i < expLines.size(); ++i) {
+        QStringList ew = expLines[i].split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        QStringList aw = actLines[i].split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        if (ew.size() != aw.size()) return 0.0;
+        for (int j = 0; j < ew.size(); ++j) {
+            bool eq = caseSensitive ? (ew[j] == aw[j])
+                                    : (ew[j].compare(aw[j], Qt::CaseInsensitive) == 0);
+            if (!eq) return 0.0;
+        }
+    }
+    return 1.0;
+}
+
+double Judger::checkWords(const QString &expPath, const QString &actPath,
+                           bool caseSensitive)
+{
+    QString exp = readFile(expPath);
+    QString act = readFile(actPath);
+
+    QStringList ew = exp.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    QStringList aw = act.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+
+    if (ew.size() != aw.size()) return 0.0;
+    for (int i = 0; i < ew.size(); ++i) {
+        bool eq = caseSensitive ? (ew[i] == aw[i])
+                                : (ew[i].compare(aw[i], Qt::CaseInsensitive) == 0);
+        if (!eq) return 0.0;
+    }
+    return 1.0;
+}
+
+double Judger::checkBinary(const QString &expPath, const QString &actPath)
+{
+    QFile ef(expPath), af(actPath);
+    if (!ef.open(QIODevice::ReadOnly) || !af.open(QIODevice::ReadOnly)) return 0.0;
+    return (ef.readAll() == af.readAll()) ? 1.0 : 0.0;
+}
+
+double Judger::checkOutput(const QString &expectedFile,
+                           const QString &actualFile,
+                           CheckerType   type,
+                           const QString &checkerExe,
+                           const QString &testDir,
+                           const QString &workDir,
+                           QString &msg)
+{
+    switch (type) {
+    case CheckerType::C1LinesWordsIgnoreCase:
+        return checkLinesWords(expectedFile, actualFile, false);
+
+    case CheckerType::C2LinesWordsCase:
+        return checkLinesWords(expectedFile, actualFile, true);
+
+    case CheckerType::C3WordsIgnoreCase:
+        return checkWords(expectedFile, actualFile, false);
+
+    case CheckerType::C4WordsCase:
+        return checkWords(expectedFile, actualFile, true);
+
+    case CheckerType::C5Binary:
+        return checkBinary(expectedFile, actualFile);
+
+    case CheckerType::C6AMM2External:
+    case CheckerType::C7External: {
+        // External checker: receive via stdin: line1=testDir, line2=workDir
+        // Output: last line is score (0.00..1.00)
+        if (checkerExe.isEmpty()) { msg = "No external checker configured"; return 0.0; }
+        QProcess p;
+        p.setWorkingDirectory(workDir);
+        p.start(checkerExe, {expectedFile, actualFile, testDir});
+        p.write((testDir + "\n" + workDir + "\n").toLocal8Bit());
+        p.closeWriteChannel();
+        p.waitForFinished(10000);
+        QString out = QString::fromLocal8Bit(p.readAllStandardOutput()).trimmed();
+        QStringList lines = out.split('\n', Qt::SkipEmptyParts);
+        bool ok; double score = 0.0;
+        if (!lines.isEmpty()) score = lines.last().toDouble(&ok);
+        return (ok && score >= 0.0 && score <= 1.0) ? score : 0.0;
+    }
+    }
+    return 0.0;
+}

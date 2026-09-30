@@ -1,0 +1,16 @@
+<RCC>
+    <qresource prefix="/">
+        <file>btnnewcontest.png</file>
+        <file>btnopencontest.png</file>
+        <file>btnsavecontest.png</file>
+        <file>btnloadtasks.png</file>
+        <file>btnrefreshtasks.png</file>
+        <file>btnloadcontestants.png</file>
+        <file>btnrefreshcontestants.png</file>
+        <file>btnjudge.png</file>
+        <file>btnexport.png</file>
+        <file>btnsettings.png</file>
+        <file>btncompilerconfig.png</file>
+        <file>btnsecurity.png</file>
+    </qresource>
+</RCC>

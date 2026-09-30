@@ -1,0 +1,12 @@
+--- ThemisLinux.pro
++++ ThemisLinux.pro
+@@ -19,7 +19,8 @@
+     CompilerConfigDialog.cpp \
+     TaskConfigDialog.cpp \
+     DetailDialog.cpp \
+-    SecurityDialog.cpp
++    SecurityDialog.cpp \
++    Judger_win.cpp
+ 
+ HEADERS += \
+     MainWindow.h \

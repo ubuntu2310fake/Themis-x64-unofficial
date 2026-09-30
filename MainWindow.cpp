@@ -1,0 +1,767 @@
+#include <QStyle>
+#include "MainWindow.h"
+#include "CompilerConfigDialog.h"
+#include "SecurityDialog.h"
+#include "EnvSettingsDialog.h"
+#include "SettingsParser.h"
+#include "JudgeEngine.h"
+#include "JudgeDialog.h"
+#include "TaskConfigDialog.h"
+#include "DetailDialog.h"
+#include <QSettings>
+
+#include <QApplication>
+#include <QMenuBar>
+#include <QMenu>
+#include <QToolBar>
+#include <QStatusBar>
+#include <QTabWidget>
+#include <QTableWidget>
+#include <QTableWidgetItem>
+#include <QHeaderView>
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QWidget>
+#include <QFileDialog>
+#include <QDir>
+#include <QMessageBox>
+#include <QIcon>
+#include <QFont>
+#include <QTextBrowser>
+#include <QSizePolicy>
+#include <QAbstractItemView>
+#include <QPixmap>
+#include <QSysInfo>
+
+// ─── Constructor ────────────────────────────────────────────────────────────
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent)
+{
+    setWindowTitle("Θέμις - Chương trình chấm bài tự động");
+    resize(1100, 680);
+
+    buildMenu();
+    buildToolbar();
+    buildCentralWidget();
+    buildStatusBar();
+    updateActionStates();
+
+    QSettings settings("ThemisLinux", "ThemisLinux");
+    int size = settings.beginReadArray("Compilers");
+    if (size > 0) {
+        for (int i = 0; i < size; ++i) {
+            settings.setArrayIndex(i);
+            CompilerEntry e;
+            e.ext = settings.value("ext").toString();
+            e.command = settings.value("command").toString();
+            m_compilerEntries.append(e);
+        }
+    } else {
+        m_compilerEntries = CompilerConfigDialog::defaultEntries();
+    }
+    settings.endArray();
+}
+
+MainWindow::~MainWindow() {}
+
+// ─── Menu Bar ───────────────────────────────────────────────────────────────
+void MainWindow::buildMenu()
+{
+    // ╔══════ Kỳ thi ══════╗
+    QMenu *mContest = menuBar()->addMenu("Kỳ thi");
+
+    QAction *actNew = mContest->addAction(QIcon(":/btnnewcontest.png"), "Tạo kỳ thi mới");
+    actNew->setShortcut(QKeySequence("Ctrl+N"));
+    connect(actNew, &QAction::triggered, this, &MainWindow::onNewContest);
+
+    QAction *actOpen = mContest->addAction(QIcon(":/btnopencontest.png"), "Mở kỳ thi cũ...");
+    actOpen->setShortcut(QKeySequence("Ctrl+O"));
+    connect(actOpen, &QAction::triggered, this, &MainWindow::onOpenContest);
+
+    m_actSave = mContest->addAction(QIcon(":/btnsavecontest.png"), "Ghi kỳ thi");
+    m_actSave->setShortcut(QKeySequence("Ctrl+S"));
+    m_actSave->setEnabled(false);
+    connect(m_actSave, &QAction::triggered, this, &MainWindow::onSaveContest);
+
+    m_actSaveAs = mContest->addAction(QIcon(":/btnsavecontest.png"), "Ghi kỳ thi dưới một tên khác...");
+    m_actSaveAs->setShortcut(QKeySequence("Shift+Ctrl+S"));
+    m_actSaveAs->setEnabled(false);
+    connect(m_actSaveAs, &QAction::triggered, this, &MainWindow::onSaveContestAs);
+
+    mContest->addSeparator();
+
+    QAction *actEnv = mContest->addAction("Các thiết lập môi trường");
+    actEnv->setShortcut(QKeySequence("F11"));
+    connect(actEnv, &QAction::triggered, this, &MainWindow::onEnvSettings);
+
+    mContest->addSeparator();
+    QAction *actQuit = mContest->addAction("Thoát");
+    actQuit->setShortcut(QKeySequence("Alt+F4"));
+    connect(actQuit, &QAction::triggered, qApp, &QApplication::quit);
+
+    // ╔══════ Bài thi ══════╗
+    QMenu *mTask = menuBar()->addMenu("Bài thi");
+
+    QAction *actLoadTasks = mTask->addAction(QIcon(":/btnloadtasks.png"), "Nạp danh sách bài thi");
+    actLoadTasks->setShortcut(Qt::Key_F2);
+    connect(actLoadTasks, &QAction::triggered, this, &MainWindow::onLoadTasks);
+
+    m_actRefreshTasks = mTask->addAction(QIcon(":/btnrefreshtasks.png"), "Cập nhật lại danh sách bài thi");
+    m_actRefreshTasks->setShortcut(Qt::Key_F4);
+    m_actRefreshTasks->setEnabled(false);
+    connect(m_actRefreshTasks, &QAction::triggered, this, &MainWindow::onRefreshTasks);
+
+    mTask->addSeparator();
+
+    m_actSelectAllTasks = mTask->addAction("Chọn tất cả bài thi");
+    m_actSelectAllTasks->setShortcut(QKeySequence("Shift+Ctrl+A"));
+    m_actSelectAllTasks->setEnabled(false);
+    connect(m_actSelectAllTasks, &QAction::triggered, this, &MainWindow::onSelectAllTasks);
+
+    m_actDeselectAllTasks = mTask->addAction("Bỏ chọn tất cả bài thi");
+    m_actDeselectAllTasks->setShortcut(QKeySequence("Shift+Ctrl+D"));
+    m_actDeselectAllTasks->setEnabled(false);
+    connect(m_actDeselectAllTasks, &QAction::triggered, this, &MainWindow::onDeselectAllTasks);
+
+    m_actToggleTasks = mTask->addAction("Chọn ↔ Bỏ chọn bài thi");
+    m_actToggleTasks->setShortcut(QKeySequence("Shift+Ctrl+I"));
+    m_actToggleTasks->setEnabled(false);
+    connect(m_actToggleTasks, &QAction::triggered, this, &MainWindow::onToggleTasks);
+
+    // ╔══════ Thí sinh ══════╗
+    QMenu *mCont = menuBar()->addMenu("Thí sinh");
+
+    QAction *actLoadCont = mCont->addAction(QIcon(":/btnloadcontestants.png"), "Nạp danh sách thí sinh");
+    actLoadCont->setShortcut(Qt::Key_F3);
+    connect(actLoadCont, &QAction::triggered, this, &MainWindow::onLoadContestants);
+
+    m_actRefreshContestants = mCont->addAction(QIcon(":/btnrefreshcontestants.png"), "Cập nhật lại danh sách thí sinh");
+    m_actRefreshContestants->setShortcut(Qt::Key_F5);
+    m_actRefreshContestants->setEnabled(false);
+    connect(m_actRefreshContestants, &QAction::triggered, this, &MainWindow::onRefreshContestants);
+
+    mCont->addSeparator();
+
+    m_actSelectAllContestants = mCont->addAction("Chọn tất cả thí sinh");
+    m_actSelectAllContestants->setShortcut(QKeySequence("Ctrl+A"));
+    m_actSelectAllContestants->setEnabled(false);
+    connect(m_actSelectAllContestants, &QAction::triggered, this, &MainWindow::onSelectAllContestants);
+
+    m_actDeselectAllContestants = mCont->addAction("Bỏ chọn tất cả thí sinh");
+    m_actDeselectAllContestants->setShortcut(QKeySequence("Ctrl+D"));
+    m_actDeselectAllContestants->setEnabled(false);
+    connect(m_actDeselectAllContestants, &QAction::triggered, this, &MainWindow::onDeselectAllContestants);
+
+    m_actToggleContestants = mCont->addAction("Chọn ↔ Bỏ chọn thí sinh");
+    m_actToggleContestants->setShortcut(QKeySequence("Ctrl+I"));
+    m_actToggleContestants->setEnabled(false);
+    connect(m_actToggleContestants, &QAction::triggered, this, &MainWindow::onToggleContestants);
+
+    // ╔══════ Chấm bài ══════╗
+    QMenu *mJudge = menuBar()->addMenu("Chấm bài");
+
+    m_actJudge = mJudge->addAction(QIcon(":/btnjudge.png"), "Chấm bài");
+    m_actJudge->setShortcut(Qt::Key_F9);
+    m_actJudge->setEnabled(false);
+    connect(m_actJudge, &QAction::triggered, this, &MainWindow::onJudge);
+
+    m_actOnlineJudge = mJudge->addAction("Quét thư mục nộp bài trực tuyến");
+    m_actOnlineJudge->setShortcut(QKeySequence("Ctrl+F9"));
+    m_actOnlineJudge->setEnabled(false);
+    connect(m_actOnlineJudge, &QAction::triggered, this, &MainWindow::onOnlineJudge);
+
+    m_actExportExcel = mJudge->addAction(QIcon(":/btnexport.png"), "Xuất kết quả ra Excel");
+    m_actExportExcel->setShortcut(Qt::Key_F12);
+    m_actExportExcel->setEnabled(false);
+    connect(m_actExportExcel, &QAction::triggered, this, &MainWindow::onExportExcel);
+
+    mJudge->addSeparator();
+
+    QAction *actCompiler = mJudge->addAction(QIcon(":/btncompilerconfig.png"), "Cấu hình bộ dịch");
+    actCompiler->setShortcut(Qt::Key_F6);
+    connect(actCompiler, &QAction::triggered, this, &MainWindow::onCompilerConfig);
+
+    QAction *actSecurity = mJudge->addAction(QIcon(":/btnsecurity.png"), "Bảo mật");
+    actSecurity->setShortcut(Qt::Key_F7);
+    connect(actSecurity, &QAction::triggered, this, &MainWindow::onSecurity);
+
+    // ╔══════ Hướng dẫn ══════╗
+    QMenu *mHelp = menuBar()->addMenu("Hướng dẫn");
+
+    QAction *actHelp = mHelp->addAction("Hướng dẫn sử dụng");
+    actHelp->setShortcut(Qt::Key_F1);
+    connect(actHelp, &QAction::triggered, this, &MainWindow::onHelp);
+
+    mHelp->addSeparator();
+    QAction *actAbout = mHelp->addAction("Thông tin về sản phẩm");
+    connect(actAbout, &QAction::triggered, this, &MainWindow::onAbout);
+}
+
+// ─── Toolbar ────────────────────────────────────────────────────────────────
+void MainWindow::buildToolbar()
+{
+    m_toolbar = addToolBar("Main");
+    m_toolbar->setIconSize(QSize(48, 48));
+    m_toolbar->setMovable(false);
+    m_toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+
+    auto btn = [&](const QString &icon, const QString &tip, auto slot) -> QAction* {
+        QAction *a = m_toolbar->addAction(QIcon(":/"+icon), tip);
+        connect(a, &QAction::triggered, this, slot);
+        return a;
+    };
+
+    btn("btnnewcontest.png",         "Tạo kỳ thi mới (Ctrl+N)",             &MainWindow::onNewContest);
+    btn("btnopencontest.png",        "Mở kỳ thi cũ (Ctrl+O)",               &MainWindow::onOpenContest);
+    btn("btnsavecontest.png",        "Ghi kỳ thi (Ctrl+S)",                 &MainWindow::onSaveContest);
+    m_toolbar->addSeparator();
+    btn("btnloadtasks.png",          "Nạp danh sách bài thi (F2)",           &MainWindow::onLoadTasks);
+    btn("btnrefreshtasks.png",       "Cập nhật bài thi (F4)",                &MainWindow::onRefreshTasks);
+    btn("btnloadcontestants.png",    "Nạp danh sách thí sinh (F3)",          &MainWindow::onLoadContestants);
+    btn("btnrefreshcontestants.png", "Cập nhật thí sinh (F5)",               &MainWindow::onRefreshContestants);
+    m_toolbar->addSeparator();
+    btn("btnjudge.png",             "Chấm bài (F9)",                        &MainWindow::onJudge);
+    btn("btnexport.png",            "Xuất kết quả ra Excel (F12)",           &MainWindow::onExportExcel);
+    m_toolbar->addSeparator();
+    btn("btnsettings.png",          "Thiết lập môi trường (F11)",            &MainWindow::onEnvSettings);
+    btn("btncompilerconfig.png",    "Cấu hình bộ dịch (F6)",                &MainWindow::onCompilerConfig);
+    btn("btnsecurity.png",          "Bảo mật (F7)",                         &MainWindow::onSecurity);
+}
+
+// ─── Central Widget ──────────────────────────────────────────────────────────
+void MainWindow::buildCentralWidget()
+{
+    m_tabs = new QTabWidget(this);
+
+    // ── Tab "Bảng điểm" ──────────────────────────────────────────────────────
+    // Plain white table, no logo (Themis gốc không hiện logo ở đây)
+    m_table = new QTableWidget();
+    m_table->setColumnCount(1);
+    m_table->setHorizontalHeaderItem(0, new QTableWidgetItem("Thí sinh"));
+    m_table->verticalHeader()->setVisible(false);
+    m_table->setAlternatingRowColors(false);
+    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_table->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Interactive);
+    m_table->setColumnWidth(0, 200);
+    m_table->setShowGrid(true);
+    m_table->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_table->horizontalHeader(), &QHeaderView::customContextMenuRequested,
+            this, &MainWindow::onColumnRightClick);
+    connect(m_table->horizontalHeader(), &QHeaderView::sectionDoubleClicked,
+            this, &MainWindow::onHeaderDoubleClick);
+    connect(m_table, &QTableWidget::cellDoubleClicked,
+            this, &MainWindow::onRowDoubleClick);
+
+    m_tabs->addTab(m_table, "Bảng điểm");
+
+    // ── Tab "Hướng dẫn" ──────────────────────────────────────────────────────
+    QTextBrowser *helpBrowser = new QTextBrowser();
+    QString docPath = "/home/truonghieu/.wine/drive_c/Program Files (x86)/Themis/~Documentation/themis.html";
+    helpBrowser->setSource(QUrl::fromLocalFile(docPath));
+    m_tabs->addTab(helpBrowser, "Hướng dẫn");
+
+    setCentralWidget(m_tabs);
+}
+
+// ─── Status Bar ─────────────────────────────────────────────────────────────
+void MainWindow::buildStatusBar()
+{
+    m_statusLabel = new QLabel(
+        "Themis:  ✓: Đã chấm;  ✗: Không nộp bài;  ✗: Dịch bị lỗi;  ⚠: Lỗi nghiêm trọng.");
+    statusBar()->addWidget(m_statusLabel, 1);
+}
+
+// ─── Enable/disable actions based on state ────────────────────────────────────
+void MainWindow::updateActionStates()
+{
+    bool hasTasks = !m_tasks.isEmpty();
+    bool hasContestants = !m_contestants.isEmpty();
+    bool hasData = hasTasks && hasContestants;
+
+    m_actRefreshTasks->setEnabled(hasTasks);
+    m_actSelectAllTasks->setEnabled(hasTasks);
+    m_actDeselectAllTasks->setEnabled(hasTasks);
+    m_actToggleTasks->setEnabled(hasTasks);
+
+    m_actRefreshContestants->setEnabled(hasContestants);
+    m_actSelectAllContestants->setEnabled(hasContestants);
+    m_actDeselectAllContestants->setEnabled(hasContestants);
+    m_actToggleContestants->setEnabled(hasContestants);
+
+    m_actJudge->setEnabled(hasData);
+    m_actOnlineJudge->setEnabled(hasData);
+    m_actExportExcel->setEnabled(hasData);
+    m_actSave->setEnabled(hasTasks || hasContestants);
+    m_actSaveAs->setEnabled(hasTasks || hasContestants);
+}
+
+// ─── Score table helpers ──────────────────────────────────────────────────────
+void MainWindow::rebuildTableColumns()
+{
+    int totalCols = 1 + m_tasks.size() + 1;
+    m_table->setColumnCount(totalCols);
+
+    auto *h0 = new QTableWidgetItem("Thí sinh");
+    h0->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_table->setHorizontalHeaderItem(0, h0);
+    m_table->setColumnWidth(0, 200);
+
+    for (int i = 0; i < m_tasks.size(); ++i) {
+        QString prefix = m_selectedTasks.contains(m_tasks[i]) ? "✓ " : "○ ";
+        auto *h = new QTableWidgetItem(prefix + m_tasks[i]);
+        h->setTextAlignment(Qt::AlignCenter);
+        m_table->setHorizontalHeaderItem(i + 1, h);
+        m_table->setColumnWidth(i + 1, 140);
+    }
+
+    auto *hTotal = new QTableWidgetItem("Tổng điểm");
+    hTotal->setTextAlignment(Qt::AlignCenter);
+    m_table->setHorizontalHeaderItem(totalCols - 1, hTotal);
+    m_table->setColumnWidth(totalCols - 1, 100);
+
+    // Refresh all empty score cells
+    for (int r = 0; r < m_table->rowCount(); ++r)
+        for (int c = 1; c < totalCols; ++c)
+            if (!m_table->item(r, c)) {
+                auto *cell = new QTableWidgetItem("");
+                cell->setTextAlignment(Qt::AlignCenter);
+                m_table->setItem(r, c, cell);
+            }
+}
+
+void MainWindow::addContestantRow(const QString &name)
+{
+    int r = m_table->rowCount();
+    m_table->setRowCount(r + 1);
+    m_table->setRowHeight(r, 22);
+
+    auto *nameItem = new QTableWidgetItem(name);
+    nameItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    nameItem->setFlags(nameItem->flags() | Qt::ItemIsUserCheckable);
+    nameItem->setCheckState(Qt::Checked);
+    m_table->setItem(r, 0, nameItem);
+
+    for (int c = 1; c < m_table->columnCount(); ++c) {
+        auto *cell = new QTableWidgetItem("");
+        cell->setTextAlignment(Qt::AlignCenter);
+        m_table->setItem(r, c, cell);
+    }
+}
+
+// ─── Slots: Kỳ thi ───────────────────────────────────────────────────────────
+void MainWindow::onNewContest()
+{
+    m_tasks.clear(); m_contestants.clear();
+    m_tasksDir.clear(); m_contestantsDir.clear();
+    m_table->setRowCount(0);
+    rebuildTableColumns();
+    setWindowTitle("Θέμις - Chương trình chấm bài tự động");
+    updateActionStates();
+}
+
+void MainWindow::onOpenContest()
+{
+    QMessageBox::information(this, "Mở kỳ thi", "Chức năng đang phát triển.");
+}
+
+void MainWindow::onSaveContest()
+{
+    QMessageBox::information(this, "Ghi kỳ thi", "Chức năng đang phát triển.");
+}
+
+void MainWindow::onSaveContestAs()
+{
+    QMessageBox::information(this, "Ghi kỳ thi dưới một tên khác", "Chức năng đang phát triển.");
+}
+
+void MainWindow::onEnvSettings()
+{
+    EnvSettingsDialog dlg(this);
+    dlg.exec();
+}
+
+// ─── Slots: Bài thi ──────────────────────────────────────────────────────────
+void MainWindow::onLoadTasks()
+{
+    QString dir = QFileDialog::getExistingDirectory(
+        this, "Chọn thư mục chứa danh sách bài thi (Tasks)");
+    if (dir.isEmpty()) return;
+
+    m_tasksDir = dir;
+    m_tasks.clear();
+    m_table->setRowCount(0);
+    m_contestants.clear();
+    m_contestantsDir.clear();
+
+    QDir d(dir);
+    for (const QString &t : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        m_tasks.append(t);
+        m_selectedTasks.insert(t);
+    }
+
+    rebuildTableColumns();
+    setWindowTitle("Θέμις - " + QDir(dir).dirName());
+    updateActionStates();
+    statusBar()->showMessage("Đã nạp " + QString::number(m_tasks.size()) + " bài thi.", 3000);
+}
+
+void MainWindow::onRefreshTasks()
+{
+    if (m_tasksDir.isEmpty()) { onLoadTasks(); return; }
+    QDir d(m_tasksDir);
+    for (const QString &t : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        if (!m_tasks.contains(t)) {
+            m_tasks.append(t);
+            m_selectedTasks.insert(t);
+        }
+    }
+    rebuildTableColumns();
+    updateActionStates();
+}
+
+void MainWindow::onSelectAllTasks()
+{
+    // In real Themis, this means mark all task columns as "selected" (checkmark)
+    // For now just a placeholder
+    statusBar()->showMessage("Đã chọn tất cả bài thi.", 2000);
+}
+
+void MainWindow::onDeselectAllTasks()
+{
+    statusBar()->showMessage("Đã bỏ chọn tất cả bài thi.", 2000);
+}
+
+void MainWindow::onToggleTasks()
+{
+    statusBar()->showMessage("Đã chọn ↔ bỏ chọn bài thi.", 2000);
+}
+
+// ─── Slots: Thí sinh ─────────────────────────────────────────────────────────
+void MainWindow::onLoadContestants()
+{
+    QString dir = QFileDialog::getExistingDirectory(
+        this, "Chọn thư mục chứa danh sách thí sinh (Contestants)");
+    if (dir.isEmpty()) return;
+
+    m_contestantsDir = dir;
+    m_contestants.clear();
+    m_table->setRowCount(0);
+
+    QDir d(dir);
+    for (const QString &c : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        if (c.compare("Logs", Qt::CaseInsensitive) == 0) continue;
+        m_contestants.append(c);
+        addContestantRow(c);
+    }
+
+    updateActionStates();
+    statusBar()->showMessage("Đã nạp " + QString::number(m_contestants.size()) + " thí sinh.", 3000);
+}
+
+void MainWindow::onRefreshContestants()
+{
+    if (m_contestantsDir.isEmpty()) { onLoadContestants(); return; }
+    QDir d(m_contestantsDir);
+    for (const QString &c : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        if (c.compare("Logs", Qt::CaseInsensitive) == 0) continue;
+        if (!m_contestants.contains(c)) { 
+            m_contestants.append(c); 
+            addContestantRow(c); 
+        }
+    }
+    updateActionStates();
+}
+
+void MainWindow::onSelectAllContestants()   { statusBar()->showMessage("Đã chọn tất cả thí sinh.", 2000); }
+void MainWindow::onDeselectAllContestants() { statusBar()->showMessage("Đã bỏ chọn tất cả thí sinh.", 2000); }
+void MainWindow::onToggleContestants()      { statusBar()->showMessage("Đã chọn ↔ bỏ chọn thí sinh.", 2000); }
+
+// ─── Slots: Chấm bài ─────────────────────────────────────────────────────────
+void MainWindow::onJudge()
+{
+    if (m_tasks.isEmpty() || m_contestants.isEmpty()) {
+        QMessageBox::warning(this, "Chấm bài",
+            "Vui lòng nạp danh sách bài thi và thí sinh trước khi chấm.");
+        return;
+    }
+
+    QStringList activeContestants;
+    for (int r = 0; r < m_table->rowCount(); ++r) {
+        if (m_table->item(r, 0)->checkState() == Qt::Checked) {
+            activeContestants.append(m_contestants[r]);
+        }
+    }
+
+    QStringList activeTasks;
+    for (const QString &t : m_tasks) {
+        if (m_selectedTasks.contains(t)) activeTasks.append(t);
+    }
+    
+    // Build engine config
+    JudgeEngine::ContestConfig cfg;
+    cfg.tasksDir        = m_tasksDir;
+    cfg.contestantsDir  = m_contestantsDir;
+    cfg.taskNames       = activeTasks;
+    cfg.contestantNames = activeContestants;
+    cfg.compilers       = m_compilerEntries;
+
+    auto *engine = new JudgeEngine(cfg, this);
+    auto *dlg    = new JudgeDialog(engine, this);
+
+    // When judging finishes, update the scoreboard table
+    connect(dlg, &JudgeDialog::judgeFinished, this,
+            [this](const QMap<QString, QMap<QString, double>> &scores) {
+        // Rebuild column headers
+        rebuildTableColumns();
+
+        for (int r = 0; r < m_table->rowCount(); ++r) {
+            QString name = m_contestants[r];
+            double  total = 0.0;
+
+            for (int ti = 0; ti < m_tasks.size(); ++ti) {
+                QString task = m_tasks[ti];
+                double  s    = scores.value(name).value(task, -1.0);
+                int     col  = ti + 1;
+
+                auto *cell = m_table->item(r, col);
+                if (!cell) { cell = new QTableWidgetItem(); m_table->setItem(r, col, cell); }
+
+                if (s < 0) {
+                    cell->setText("—");
+                    cell->setForeground(QColor(150,150,150));
+                } else {
+                    cell->setText(QString::number(s, 'f', 2));
+                    cell->setTextAlignment(Qt::AlignCenter);
+                    cell->setForeground(s > 0 ? QColor(0,100,0) : QColor(180,0,0));
+                }
+                if (s > 0) total += s;
+            }
+
+            // Total column
+            int lastCol = m_tasks.size() + 1;
+            auto *totCell = m_table->item(r, lastCol);
+            if (!totCell) { totCell = new QTableWidgetItem(); m_table->setItem(r, lastCol, totCell); }
+            totCell->setText(QString::number(total, 'f', 2));
+            totCell->setTextAlignment(Qt::AlignCenter);
+            totCell->setForeground(QColor(0, 0, 150));
+            QFont bf = totCell->font(); bf.setBold(true); totCell->setFont(bf);
+        }
+        statusBar()->showMessage("✔ Chấm bài hoàn tất!", 5000);
+    });
+
+    engine->start();
+    dlg->exec();
+    delete dlg;
+    engine->deleteLater();
+}
+
+void MainWindow::onOnlineJudge()
+{
+    QMessageBox::information(this, "Chấm bài trực tuyến", "Chức năng đang phát triển.");
+}
+
+void MainWindow::onExportExcel()
+{
+    QString file = QFileDialog::getSaveFileName(this, "Xuất kết quả ra Excel",
+        "KetQua.csv", "CSV Files (*.csv);;Excel HTML (*.xls)");
+    if (file.isEmpty()) return;
+
+    QFile f(file);
+    if (!f.open(QIODevice::WriteOnly)) {
+        QMessageBox::warning(this, "Lỗi", "Không thể tạo file.");
+        return;
+    }
+
+    if (file.endsWith(".csv", Qt::CaseInsensitive)) {
+        f.write("\xEF\xBB\xBF"); // UTF-8 BOM for Excel
+        QTextStream out(&f);
+        // Header
+        out << "\"Thí sinh\"";
+        for (int c = 1; c < m_table->columnCount(); ++c) {
+            out << ",\"" << m_table->horizontalHeaderItem(c)->text().replace("✓ ", "").replace("○ ", "") << "\"";
+        }
+        out << "\n";
+        
+        // Data
+        for (int r = 0; r < m_table->rowCount(); ++r) {
+            out << "\"" << m_table->item(r, 0)->text() << "\"";
+            for (int c = 1; c < m_table->columnCount(); ++c) {
+                QTableWidgetItem *it = m_table->item(r, c);
+                out << ",\"" << (it ? it->text() : "") << "\"";
+            }
+            out << "\n";
+        }
+    } else {
+        QTextStream out(&f);
+        out << "<html><head><meta charset=\"utf-8\"></head><body><table border=\"1\">\n";
+        out << "<tr><th>Thí sinh</th>";
+        for (int c = 1; c < m_table->columnCount(); ++c)
+            out << "<th>" << m_table->horizontalHeaderItem(c)->text().replace("✓ ", "").replace("○ ", "") << "</th>";
+        out << "</tr>\n";
+        for (int r = 0; r < m_table->rowCount(); ++r) {
+            out << "<tr><td>" << m_table->item(r, 0)->text() << "</td>";
+            for (int c = 1; c < m_table->columnCount(); ++c) {
+                QTableWidgetItem *it = m_table->item(r, c);
+                out << "<td>" << (it ? it->text() : "") << "</td>";
+            }
+            out << "</tr>\n";
+        }
+        out << "</table></body></html>";
+    }
+    
+    f.close();
+    QMessageBox::information(this, "Xuất kết quả", "Đã xuất bảng điểm thành công!");
+}
+
+void MainWindow::onCompilerConfig()
+{
+    CompilerConfigDialog dlg(this);
+    if (!m_compilerEntries.isEmpty()) dlg.setEntries(m_compilerEntries);
+    if (dlg.exec() == QDialog::Accepted) {
+        m_compilerEntries = dlg.entries();
+        
+        QSettings settings("ThemisLinux", "ThemisLinux");
+        settings.beginWriteArray("Compilers");
+        for (int i = 0; i < m_compilerEntries.size(); ++i) {
+            settings.setArrayIndex(i);
+            settings.setValue("ext", m_compilerEntries[i].ext);
+            settings.setValue("command", m_compilerEntries[i].command);
+        }
+        settings.endArray();
+    }
+}
+
+void MainWindow::onSecurity()
+{
+    SecurityDialog dlg(this);
+    dlg.exec();
+}
+
+// ─── Slots: Hướng dẫn ────────────────────────────────────────────────────────
+void MainWindow::onHelp()
+{
+    m_tabs->setCurrentIndex(1);
+}
+
+void MainWindow::onAbout()
+{
+    QMessageBox::about(this, "Thông tin về sản phẩm",
+        "<b>Themis Linux x64</b><br/>"
+        "Chương trình chấm bài tự động<br/><br/>"
+        "Phiên bản: 1.0.0<br/>"
+        "Nền tảng: " + QSysInfo::prettyProductName() + "<br/><br/>"
+        "Dựa trên Themis © Lê Minh Hoàng &amp; Đỗ Đức Đông.<br/>"
+        "Phiên bản Linux viết lại bằng C++ / Qt6.");
+}
+
+// ─── Context menu on header ───────────────────────────────────────────────────
+void MainWindow::onColumnRightClick(const QPoint &pos)
+{
+    int logicalIdx = m_table->horizontalHeader()->logicalIndexAt(pos);
+    if (logicalIdx <= 0 || logicalIdx > m_tasks.size()) return;
+
+    QString taskName = m_tasks[logicalIdx - 1];
+
+    QMenu menu;
+    QAction *actConfig = menu.addAction("📋 Cấu hình bài: " + taskName);
+    QAction *actRejudge = menu.addAction("✓ Chấm lại bài: " + taskName);
+    menu.addSeparator();
+    bool isSelected = m_selectedTasks.contains(taskName);
+    QAction *actDeselect = menu.addAction(isSelected ? "✗ Bỏ chọn bài: " + taskName : "✓ Chọn bài: " + taskName);
+    
+    QAction *res = menu.exec(m_table->horizontalHeader()->mapToGlobal(pos));
+    if (res == actConfig) {
+        onHeaderDoubleClick(logicalIdx);
+    } else if (res == actRejudge) {
+        // Run Judge for this task only
+        QStringList activeContestants;
+        for (int r = 0; r < m_table->rowCount(); ++r) {
+            if (m_table->item(r, 0)->checkState() == Qt::Checked) {
+                activeContestants.append(m_contestants[r]);
+            }
+        }
+        if (activeContestants.isEmpty()) return;
+        
+        JudgeEngine::ContestConfig cfg;
+        cfg.tasksDir        = m_tasksDir;
+        cfg.contestantsDir  = m_contestantsDir;
+        cfg.taskNames       = {taskName};
+        cfg.contestantNames = activeContestants;
+        cfg.compilers       = m_compilerEntries;
+
+        auto *engine = new JudgeEngine(cfg, this);
+        auto *dlg    = new JudgeDialog(engine, this);
+        connect(engine, &JudgeEngine::updateReady, this, &MainWindow::onJudgeUpdate);
+        engine->start();
+        dlg->exec();
+        delete dlg;
+        engine->deleteLater();
+    } else if (res == actDeselect) {
+        // Toggle task selection
+        if (isSelected) m_selectedTasks.remove(taskName);
+        else m_selectedTasks.insert(taskName);
+        rebuildTableColumns();
+        updateActionStates();
+    }
+}
+
+void MainWindow::onHeaderDoubleClick(int col)
+{
+    if (col <= 0 || col > m_tasks.size()) return;
+    QString taskName = m_tasks[col - 1];
+    
+    TaskConfigDialog dlg(m_tasksDir + "/" + taskName, taskName, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        // Cấu hình đã được lưu
+    }
+}
+
+void MainWindow::onRowDoubleClick(int row, int col)
+{
+    Q_UNUSED(col);
+    if (row < 0 || row >= m_contestants.size()) return;
+    
+    QString contestant = m_contestants[row];
+    QString logPath = m_contestantsDir + "/Logs/" + contestant + ".log";
+    DetailDialog dlg(contestant, logPath, this);
+    dlg.exec();
+}
+
+void MainWindow::onJudgeUpdate(const JudgeUpdate &update)
+{
+    int row = m_contestants.indexOf(update.contestantName);
+    int col = m_tasks.indexOf(update.taskName) + 1;
+    if (row < 0 || col <= 0) return;
+
+    QTableWidgetItem *cell = m_table->item(row, col);
+    if (!cell) {
+        cell = new QTableWidgetItem();
+        cell->setTextAlignment(Qt::AlignCenter);
+        m_table->setItem(row, col, cell);
+    }
+    cell->setText(QString::number(update.taskScore, 'f', 2));
+    
+    // Also recalculate total for this contestant
+    double total = 0;
+    for (int c = 1; c <= m_tasks.size(); ++c) {
+        if (m_table->item(row, c) && !m_table->item(row, c)->text().isEmpty()) {
+            total += m_table->item(row, c)->text().toDouble();
+        }
+    }
+    
+    int totalCol = m_tasks.size() + 1;
+    QTableWidgetItem *totalCell = m_table->item(row, totalCol);
+    if (!totalCell) {
+        totalCell = new QTableWidgetItem();
+        totalCell->setTextAlignment(Qt::AlignCenter);
+        QFont f = totalCell->font();
+        f.setBold(true);
+        totalCell->setFont(f);
+        totalCell->setForeground(QBrush(QColor("#000080")));
+        m_table->setItem(row, totalCol, totalCell);
+    }
+    totalCell->setText(QString::number(total, 'f', 2));
+}
