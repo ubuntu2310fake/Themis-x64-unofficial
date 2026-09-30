@@ -16,3 +16,14 @@ Themis-Windows.zip
 linuxdeployqt
 python.zip
 mingw.7z
+AppRun
+default.desktop
+.DirIcon
+lib/
+plugins/
+translations/
+qt.conf
+ThemisLinux.desktop
+ThemisLinux.png
+moc_predefs.h
+.qmake.stash
