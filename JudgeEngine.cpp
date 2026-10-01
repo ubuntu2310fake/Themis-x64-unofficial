@@ -116,10 +116,15 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
     } else if (foundExt.isEmpty()) {
         // ELF: make executable and run directly
         exeFile = localSrc;
+#ifndef Q_OS_WIN
         QProcess::execute("chmod", {"+x", exeFile});
+#endif
     } else {
         // Need to compile
         exeFile = workPath + "/" + taskName;
+#ifdef Q_OS_WIN
+        exeFile += ".exe";
+#endif
         QString ceLog;
         bool ok = compiler
             ? Judger::compile(localSrc, exeFile, *compiler, taskName, ceLog)
@@ -137,7 +142,9 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
             return res;
         }
         // Set executable permission
+#ifndef Q_OS_WIN
         QProcess::execute("chmod", {"+x", exeFile});
+#endif
     }
 
     // ── Judge each test case ──────────────────────────────────────────────────

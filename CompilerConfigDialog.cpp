@@ -27,6 +27,13 @@ QList<CompilerEntry> CompilerConfigDialog::defaultEntries()
     };
 
     QString appDir = QCoreApplication::applicationDirPath();
+#ifdef Q_OS_WIN
+    QString gpp  = "\"%APPDIR%/ucrt64/bin/g++.exe\"";
+    QString gcc  = "\"%APPDIR%/ucrt64/bin/gcc.exe\"";
+    QString fpc  = "fpc";
+    QString java = "javac";
+    QString py3  = "\"%APPDIR%/PYTHON/python.exe\"";
+#else
     QString gpp  = "\"%APPDIR%/ucrt64/bin/g++.exe\"";
     if (!QFile::exists(appDir + "/ucrt64/bin/g++.exe")) gpp = which("g++");
     
@@ -38,6 +45,7 @@ QList<CompilerEntry> CompilerConfigDialog::defaultEntries()
     
     QString py3  = "\"%APPDIR%/PYTHON/python.exe\"";
     if (!QFile::exists(appDir + "/PYTHON/python.exe")) py3 = which("python3");
+#endif
 
     return {
         { ".cpp",   gpp  + " -O2 -x c++ \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\"" },

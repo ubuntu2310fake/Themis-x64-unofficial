@@ -8,7 +8,7 @@
 #include <QFileDialog>
 #include <QProcess>
 #include <QTabWidget>
-
+#include <QDir>
 // ─── Helper: auto-detect a binary ─────────────────────────────────────────────
 static QString whichBin(const QString &bin)
 {
@@ -70,11 +70,13 @@ EnvSettingsDialog::EnvSettingsDialog(QWidget *parent) : QDialog(parent)
     formGen->addRow("Thư mục nộp bài trực tuyến:",
                     makeExeRow(m_edtOnlineDir, "", "thư mục nộp bài", tabGeneral, true));
 
+    QString defaultTemp = QDir::tempPath() + "/Themis/";
+
     formGen->addRow("Thư mục chứa kỳ thi giải nén:",
-                    makeExeRow(m_edtExtractDir, "/tmp/", "thư mục giải nén", tabGeneral, true));
+                    makeExeRow(m_edtExtractDir, defaultTemp, "thư mục giải nén", tabGeneral, true));
 
     formGen->addRow("Thư mục chứa \"phòng thi\":",
-                    makeExeRow(m_edtExamRoomDir, "/tmp/", "thư mục phòng thi", tabGeneral, true));
+                    makeExeRow(m_edtExamRoomDir, defaultTemp, "thư mục phòng thi", tabGeneral, true));
 
     // Number format
     QHBoxLayout *numLay = new QHBoxLayout();
