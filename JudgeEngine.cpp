@@ -9,6 +9,8 @@
 #include <QElapsedTimer>
 #include <QApplication>
 #include <QTextStream>
+#include <QCollator>
+#include <algorithm>
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // JudgeWorker
@@ -95,6 +97,8 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         return res;
     }
 
+    res.sourceFile = QFileInfo(sourceFile).fileName();
+
     // ── Create working directory ──────────────────────────────────────────────
     QString workPath = m_cfg.workDir + "/" + m_cfg.contestantName + "/" + taskName;
     QDir().mkpath(workPath);
@@ -155,45 +159,128 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
     QDir taskDir(m_cfg.tasksDir + "/" + taskName);
     QStringList testFolders = taskDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
 
-    // Filter out non-test folders
+    // Filter test folders: first try from cfg.testCases, else scan testFolders
     QStringList tests;
-    for (const QString &f : testFolders)
-        if (f.startsWith("Test", Qt::CaseInsensitive) || f.startsWith("test"))
-            tests << f;
+    if (!cfg.testCases.isEmpty()) {
+        for (const TestCaseConfig &tc : cfg.testCases) {
+            for (const QString &f : testFolders) {
+                if (f.compare(tc.name, Qt::CaseInsensitive) == 0) {
+                    if (!tests.contains(f)) tests << f;
+                    break;
+                }
+            }
+        }
+    }
+    if (tests.isEmpty()) {
+        for (const QString &f : testFolders) {
+            if (f.startsWith("test", Qt::CaseInsensitive)) {
+                tests << f;
+            } else {
+                QDir sub(taskDir.filePath(f));
+                QStringList fs = sub.entryList(QDir::Files);
+                bool hasTestFiles = false;
+                for (const QString &fileName : fs) {
+                    if (fileName.endsWith(".inp", Qt::CaseInsensitive) ||
+                        fileName.endsWith(".in", Qt::CaseInsensitive) ||
+                        fileName.endsWith(".out", Qt::CaseInsensitive) ||
+                        fileName.endsWith(".ans", Qt::CaseInsensitive) ||
+                        fileName.endsWith(".txt", Qt::CaseInsensitive)) {
+                        hasTestFiles = true;
+                        break;
+                    }
+                }
+                if (hasTestFiles) tests << f;
+            }
+        }
+    }
+
+    // Natural sort tests (Test1, Test2, ..., Test10)
+    QCollator collator;
+    collator.setNumericMode(true);
+    std::sort(tests.begin(), tests.end(), collator);
 
     for (int ti = 0; ti < tests.size(); ++ti) {
         const QString &testName = tests[ti];
         QString testPath = taskDir.filePath(testName);
+        QDir td(testPath);
 
-        // Find INP and OUT files
-        QString inpFile = testPath + "/" + cfg.inputFile;
-        QString outFile = testPath + "/" + cfg.outputFile;
-
-        if (!QFile::exists(inpFile) || !QFile::exists(outFile)) {
-            // Try to find by name pattern
-            QDir td(testPath);
-            QStringList inps = td.entryList({"*.INP","*.inp"}, QDir::Files);
-            QStringList outs = td.entryList({"*.OUT","*.out"}, QDir::Files);
-            if (!inps.isEmpty()) inpFile = testPath + "/" + inps.first();
-            if (!outs.isEmpty()) outFile = testPath + "/" + outs.first();
+        // Find INP and OUT files case-insensitively
+        QString inpFile;
+        if (!cfg.inputFile.isEmpty()) {
+            for (const QString &f : td.entryList(QDir::Files)) {
+                if (f.compare(cfg.inputFile, Qt::CaseInsensitive) == 0) {
+                    inpFile = td.filePath(f);
+                    break;
+                }
+            }
+        }
+        if (inpFile.isEmpty()) {
+            for (const QString &f : td.entryList(QDir::Files)) {
+                if (f.endsWith(".inp", Qt::CaseInsensitive) || f.endsWith(".in", Qt::CaseInsensitive)) {
+                    inpFile = td.filePath(f);
+                    break;
+                }
+            }
         }
 
-        // Copy INP to working directory so freopen can find it
-        QString localInp = workPath + "/" + cfg.inputFile;
-        QFile::remove(localInp);
-        QFile::copy(inpFile, localInp);
+        QString outFile;
+        if (!cfg.outputFile.isEmpty()) {
+            for (const QString &f : td.entryList(QDir::Files)) {
+                if (f.compare(cfg.outputFile, Qt::CaseInsensitive) == 0) {
+                    outFile = td.filePath(f);
+                    break;
+                }
+            }
+        }
+        if (outFile.isEmpty()) {
+            for (const QString &f : td.entryList(QDir::Files)) {
+                if (f.endsWith(".out", Qt::CaseInsensitive) || f.endsWith(".ans", Qt::CaseInsensitive)) {
+                    outFile = td.filePath(f);
+                    break;
+                }
+            }
+        }
 
-        // If useStdOut is false, program writes to cfg.outputFile in workDir
-        QString actualOut = cfg.useStdOut ? (workPath + "/" + testName + ".out") : (workPath + "/" + cfg.outputFile);
+        // Copy INP to working directory with all possible casings so freopen finds it
+        QString baseInp = !cfg.inputFile.isEmpty() ? QFileInfo(cfg.inputFile).completeBaseName() : taskName;
+        QStringList inpVariations = {
+            cfg.inputFile,
+            baseInp + ".INP",
+            baseInp + ".inp",
+            baseInp.toUpper() + ".INP",
+            baseInp.toLower() + ".inp",
+            taskName + ".INP",
+            taskName + ".inp",
+            taskName.toUpper() + ".INP",
+            taskName.toLower() + ".inp"
+        };
+        inpVariations.removeDuplicates();
+        for (const QString &v : inpVariations) {
+            if (v.isEmpty()) continue;
+            QString target = workPath + "/" + v;
+            QFile::remove(target);
+            if (!inpFile.isEmpty()) {
+                QFile::copy(inpFile, target);
+            }
+        }
+
+        // Prepare output file target
+        QString defaultOutName = !cfg.outputFile.isEmpty() ? cfg.outputFile : (taskName + ".OUT");
+        QString actualOut = cfg.useStdOut ? (workPath + "/" + testName + ".out") : (workPath + "/" + defaultOutName);
         QFile::remove(actualOut);
+        // Also remove any existing case variations of output in workPath
+        QFile::remove(workPath + "/" + taskName + ".out");
+        QFile::remove(workPath + "/" + taskName + ".OUT");
+        QFile::remove(workPath + "/" + taskName.toLower() + ".out");
+        QFile::remove(workPath + "/" + taskName.toUpper() + ".OUT");
 
         // Determine test limits
-        double timeLimit = cfg.timeLimit;
-        int    memLimit  = cfg.memoryLimit;
+        double timeLimit = cfg.timeLimit > 0 ? cfg.timeLimit : 1.0;
+        int    memLimit  = cfg.memoryLimit > 0 ? (int)cfg.memoryLimit : 1024;
 
         // Check per-test overrides
         for (const TestCaseConfig &tc : cfg.testCases) {
-            if (tc.name == testName) {
+            if (tc.name.compare(testName, Qt::CaseInsensitive) == 0) {
                 if (tc.timeLimit  > 0) timeLimit = tc.timeLimit;
                 if (tc.memoryLimit > 0) memLimit = tc.memoryLimit;
                 break;
@@ -210,6 +297,34 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         } else {
             tr = Judger::execute(exeFile, workPath, inpFile, actualOut, cfg.useStdIn, cfg.useStdOut, timeLimit, memLimit, "");
         }
+        tr.testName = testName;
+
+        // If useStdOut is false, search workPath case-insensitively for the contestant output!
+        if (!cfg.useStdOut) {
+            QDir wd(workPath);
+            QString foundOut;
+            QString targetBase = !cfg.outputFile.isEmpty() ? QFileInfo(cfg.outputFile).completeBaseName() : taskName;
+            for (const QString &f : wd.entryList(QDir::Files)) {
+                if (f.compare(defaultOutName, Qt::CaseInsensitive) == 0 ||
+                    f.compare(targetBase + ".out", Qt::CaseInsensitive) == 0 ||
+                    f.compare(taskName + ".out", Qt::CaseInsensitive) == 0) {
+                    foundOut = wd.filePath(f);
+                    break;
+                }
+            }
+            if (!foundOut.isEmpty()) {
+                actualOut = foundOut;
+            }
+        }
+
+        // Determine score for this test
+        double testMark = cfg.mark > 0 ? cfg.mark : 1.0;
+        for (const TestCaseConfig &tc : cfg.testCases) {
+            if (tc.name.compare(testName, Qt::CaseInsensitive) == 0 && tc.mark > 0) {
+                testMark = tc.mark;
+                break;
+            }
+        }
 
         // Check output if ran successfully
         if (tr.verdict == Verdict::Judging) {
@@ -217,14 +332,24 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
             double ratio = Judger::checkOutput(outFile, actualOut, checker,
                                                "", testPath, workPath, msg);
             tr.checkerMsg = msg;
-            tr.verdict    = (ratio >= 1.0) ? Verdict::AC : Verdict::WA;
-
-            // Score for this test
-            double testMark = cfg.mark; // default
-            for (const TestCaseConfig &tc : cfg.testCases) {
-                if (tc.name == testName && tc.mark > 0) { testMark = tc.mark; break; }
+            tr.score      = ratio * testMark;
+            if (ratio >= 1.0) {
+                tr.verdict = Verdict::AC;
+            } else {
+                tr.verdict = Verdict::WA;
             }
-            tr.score = ratio * testMark;
+        } else if (tr.verdict == Verdict::TLE) {
+            tr.score = 0.0;
+            if (tr.checkerMsg.isEmpty()) tr.checkerMsg = "Chạy quá thời gian";
+        } else if (tr.verdict == Verdict::MLE) {
+            tr.score = 0.0;
+            if (tr.checkerMsg.isEmpty()) tr.checkerMsg = "Chạy quá bộ nhớ";
+        } else if (tr.verdict == Verdict::RTE) {
+            tr.score = 0.0;
+            if (tr.checkerMsg.isEmpty()) tr.checkerMsg = "Chạy sinh lỗi";
+        } else {
+            tr.score = 0.0;
+            if (tr.checkerMsg.isEmpty()) tr.checkerMsg = "Lỗi nghiêm trọng";
         }
 
         if (tr.verdict != Verdict::AC) allAC = false;
@@ -240,10 +365,10 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         u.taskScore = totalScore;
         emit updateReady(u);
 
-        emit logMessage(QString("[%1/%2/%3] %4  %5ms  %6KB  %7 pts")
+        emit logMessage(QString("[%1/%2/%3] %4  %5s  %6KB  %7 pts")
             .arg(m_cfg.contestantName, taskName, testName,
                  verdictText(tr.verdict))
-            .arg(tr.timeMs, 0, 'f', 1)
+            .arg(tr.timeMs / 1000.0, 0, 'f', 3)
             .arg(tr.memKb)
             .arg(tr.score, 0, 'f', 2));
     }
@@ -330,31 +455,79 @@ void JudgeEngine::onWorkerDone(const QString &name, const QList<TaskResult> &res
     // Write detailed log to ContestantsDir/Logs/<name>.log
     QDir d(m_cfg.contestantsDir);
     d.mkdir("Logs");
-    QFile logFile(m_cfg.contestantsDir + "/Logs/" + name + ".log");
+    QString logFilePath = m_cfg.contestantsDir + "/Logs/" + name + ".log";
+
+    // Read existing log to preserve tasks that were not judged in this run!
+    QMap<QString, QStringList> taskBlocks;
+    QStringList taskOrder;
+
+    QFile existingFile(logFilePath);
+    if (existingFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&existingFile);
+        QString currentTask;
+        while (!in.atEnd()) {
+            QString line = in.readLine();
+            QString trimmed = line.trimmed();
+            if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                currentTask = trimmed.mid(1, trimmed.length() - 2);
+                if (!taskOrder.contains(currentTask)) taskOrder.append(currentTask);
+                taskBlocks[currentTask].clear();
+            } else if (!currentTask.isEmpty()) {
+                taskBlocks[currentTask].append(line);
+            }
+        }
+        existingFile.close();
+    }
+
+    // Now update or add the new results
+    for (const TaskResult &tr : results) {
+        if (!taskOrder.contains(tr.taskName)) taskOrder.append(tr.taskName);
+        QStringList lines;
+        if (!tr.sourceFile.isEmpty()) {
+            lines.append("Source=" + tr.sourceFile);
+        }
+        lines.append(QString("Score=%1").arg(tr.totalScore, 0, 'f', 2));
+        if (!tr.ceLog.isEmpty()) {
+            lines.append("CE");
+            lines.append(tr.ceLog);
+        } else if (tr.verdict == Verdict::SK) {
+            lines.append("SK");
+        } else {
+            lines.append("OK");
+            for (const TestResult &tc : tr.tests) {
+                QString vStr;
+                switch(tc.verdict) {
+                    case Verdict::AC: vStr = "AC"; break;
+                    case Verdict::WA: vStr = "WA"; break;
+                    case Verdict::TLE: vStr = "TLE"; break;
+                    case Verdict::MLE: vStr = "MLE"; break;
+                    case Verdict::RTE: vStr = "RTE"; break;
+                    case Verdict::CE: vStr = "CE"; break;
+                    case Verdict::SK: vStr = "SK"; break;
+                    case Verdict::IE: vStr = "IE"; break;
+                    default: vStr = "UNK"; break;
+                }
+                // Format: testName|verdict|timeSec|memKb|score|checkerMsg
+                lines.append(QString("%1|%2|%3|%4|%5|%6")
+                    .arg(tc.testName)
+                    .arg(vStr)
+                    .arg(QString::number(tc.timeMs / 1000.0, 'f', 6))
+                    .arg(tc.memKb)
+                    .arg(QString::number(tc.score, 'f', 2))
+                    .arg(tc.checkerMsg));
+            }
+        }
+        taskBlocks[tr.taskName] = lines;
+    }
+
+    // Write back all tasks to logFile
+    QFile logFile(logFilePath);
     if (logFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&logFile);
-        for (const TaskResult &tr : results) {
-            out << "[" << tr.taskName << "]\n";
-            if (!tr.ceLog.isEmpty()) {
-                out << "CE\n" << tr.ceLog << "\n";
-            } else if (tr.verdict == Verdict::SK) {
-                out << "SK\n";
-            } else {
-                for (const TestResult &tc : tr.tests) {
-                    QString vStr;
-                    switch(tc.verdict) {
-                        case Verdict::AC: vStr = "AC"; break;
-                        case Verdict::WA: vStr = "WA"; break;
-                        case Verdict::TLE: vStr = "TLE"; break;
-                        case Verdict::MLE: vStr = "MLE"; break;
-                        case Verdict::RTE: vStr = "RTE"; break;
-                        case Verdict::CE: vStr = "CE"; break;
-                        case Verdict::SK: vStr = "SK"; break;
-                        case Verdict::IE: vStr = "IE"; break;
-                        default: vStr = "UNK"; break;
-                    }
-                    out << tc.testName << "|" << vStr << "|" << tc.timeMs << "|" << tc.memKb << "|" << tc.checkerMsg << "\n";
-                }
+        for (const QString &tname : taskOrder) {
+            out << "[" << tname << "]\n";
+            for (const QString &l : taskBlocks[tname]) {
+                out << l << "\n";
             }
         }
         logFile.close();

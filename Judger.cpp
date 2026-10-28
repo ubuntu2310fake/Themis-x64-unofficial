@@ -209,16 +209,49 @@ TestResult Judger::execute(const QString &exeFile,
     // Determine verdict
     if (timedOut || res.timeMs >= timeLimitSec * 1000.0) {
         res.verdict = Verdict::TLE;
+        res.checkerMsg = "Chạy quá thời gian";
     } else if (res.memKb > (long)memLimitMb * 1024) {
         res.verdict = Verdict::MLE;
+        res.checkerMsg = "Chạy quá bộ nhớ";
     } else if (WIFSIGNALED(status)) {
         int sig = WTERMSIG(status);
-        if (sig == SIGXCPU) res.verdict = Verdict::TLE;
-        else                 res.verdict = Verdict::RTE;
-        res.checkerMsg = QString("Signal %1").arg(sig);
+        if (sig == SIGXCPU) {
+            res.verdict = Verdict::TLE;
+            res.checkerMsg = "Chạy quá thời gian (SIGXCPU)";
+        } else {
+            res.verdict = Verdict::RTE;
+            if (sig == SIGSEGV) {
+                res.checkerMsg = "Chạy sinh lỗi: Tràn ngăn xếp / Lỗi phân đoạn (Stack overflow / Segmentation fault, Signal 11)";
+            } else if (sig == SIGFPE) {
+                res.checkerMsg = "Chạy sinh lỗi: Lỗi số học (SIGFPE, Signal 8)";
+            } else if (sig == SIGABRT) {
+                res.checkerMsg = "Chạy sinh lỗi: Hủy tiến trình (SIGABRT, Signal 6)";
+            } else if (sig == SIGBUS) {
+                res.checkerMsg = "Chạy sinh lỗi: Lỗi bus bộ nhớ (SIGBUS, Signal 7)";
+            } else if (sig == SIGILL) {
+                res.checkerMsg = "Chạy sinh lỗi: Lệnh không hợp lệ (SIGILL, Signal 4)";
+            } else {
+                res.checkerMsg = QString("Chạy sinh lỗi: Signal %1").arg(sig);
+            }
+        }
     } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        int exitCode = WEXITSTATUS(status);
         res.verdict = Verdict::RTE;
-        res.checkerMsg = QString("Exit code %1").arg(WEXITSTATUS(status));
+        if (exitCode == 201) {
+            res.checkerMsg = "Chạy sinh lỗi: Vượt quá giới hạn (Range check error, exit code: 201)";
+        } else if (exitCode == 202) {
+            res.checkerMsg = "Chạy sinh lỗi: Tràn ngăn xếp (Stack overflow, exit code: 202)";
+        } else if (exitCode == 203) {
+            res.checkerMsg = "Chạy sinh lỗi: Tràn bộ nhớ heap (Heap overflow, exit code: 203)";
+        } else if (exitCode == 204) {
+            res.checkerMsg = "Chạy sinh lỗi: Thao tác con trỏ không hợp lệ (Invalid pointer operation, exit code: 204)";
+        } else if (exitCode == 215) {
+            res.checkerMsg = "Chạy sinh lỗi: Tràn số học (Arithmetic overflow, exit code: 215)";
+        } else if (exitCode == 216) {
+            res.checkerMsg = "Chạy sinh lỗi: Vi phạm truy cập bộ nhớ (Access violation, exit code: 216)";
+        } else {
+            res.checkerMsg = QString("Chạy sinh lỗi: exit code: %1").arg(exitCode);
+        }
     } else {
         res.verdict = Verdict::Judging; // needs output check
     }
@@ -252,52 +285,99 @@ static QString readFile(const QString &path)
 }
 
 double Judger::checkLinesWords(const QString &expPath, const QString &actPath,
-                                bool caseSensitive)
+                                bool caseSensitive, QString &msg)
 {
+    if (!QFile::exists(actPath)) {
+        msg = "Không tìm thấy file kết quả!";
+        return 0.0;
+    }
     QString exp = readFile(expPath).trimmed();
     QString act = readFile(actPath).trimmed();
+
+    if (act.isEmpty() && !exp.isEmpty()) {
+        msg = "File kết quả rỗng!";
+        return 0.0;
+    }
 
     QStringList expLines = exp.split('\n', Qt::SkipEmptyParts);
     QStringList actLines = act.split('\n', Qt::SkipEmptyParts);
 
-    if (expLines.size() != actLines.size()) return 0.0;
+    if (expLines.size() != actLines.size()) {
+        msg = QString("Số dòng khác nhau (Đáp án: %1 dòng, Thí sinh: %2 dòng)")
+              .arg(expLines.size()).arg(actLines.size());
+        return 0.0;
+    }
 
     for (int i = 0; i < expLines.size(); ++i) {
         QStringList ew = expLines[i].split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
         QStringList aw = actLines[i].split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-        if (ew.size() != aw.size()) return 0.0;
+        if (ew.size() != aw.size()) {
+            msg = QString("Dòng %1: Số lượng từ khác nhau (Đáp án: %2 từ, Thí sinh: %3 từ)")
+                  .arg(i + 1).arg(ew.size()).arg(aw.size());
+            return 0.0;
+        }
         for (int j = 0; j < ew.size(); ++j) {
             bool eq = caseSensitive ? (ew[j] == aw[j])
                                     : (ew[j].compare(aw[j], Qt::CaseInsensitive) == 0);
-            if (!eq) return 0.0;
+            if (!eq) {
+                msg = QString("Dòng %1 từ %2: Khác nhau (Đáp án: \"%3\", Thí sinh: \"%4\")")
+                      .arg(i + 1).arg(j + 1).arg(ew[j].left(25)).arg(aw[j].left(25));
+                return 0.0;
+            }
         }
     }
+    msg = "Kết quả đúng!";
     return 1.0;
 }
 
 double Judger::checkWords(const QString &expPath, const QString &actPath,
-                           bool caseSensitive)
+                           bool caseSensitive, QString &msg)
 {
+    if (!QFile::exists(actPath)) {
+        msg = "Không tìm thấy file kết quả!";
+        return 0.0;
+    }
     QString exp = readFile(expPath);
     QString act = readFile(actPath);
 
     QStringList ew = exp.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
     QStringList aw = act.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
 
-    if (ew.size() != aw.size()) return 0.0;
+    if (ew.size() != aw.size()) {
+        msg = QString("Số lượng từ khác nhau (Đáp án: %1, Thí sinh: %2)")
+              .arg(ew.size()).arg(aw.size());
+        return 0.0;
+    }
     for (int i = 0; i < ew.size(); ++i) {
         bool eq = caseSensitive ? (ew[i] == aw[i])
                                 : (ew[i].compare(aw[i], Qt::CaseInsensitive) == 0);
-        if (!eq) return 0.0;
+        if (!eq) {
+            msg = QString("Từ thứ %1 khác nhau (Đáp án: \"%2\", Thí sinh: \"%3\")")
+                  .arg(i + 1).arg(ew[i].left(25)).arg(aw[i].left(25));
+            return 0.0;
+        }
     }
+    msg = "Kết quả đúng!";
     return 1.0;
 }
 
-double Judger::checkBinary(const QString &expPath, const QString &actPath)
+double Judger::checkBinary(const QString &expPath, const QString &actPath, QString &msg)
 {
     QFile ef(expPath), af(actPath);
-    if (!ef.open(QIODevice::ReadOnly) || !af.open(QIODevice::ReadOnly)) return 0.0;
-    return (ef.readAll() == af.readAll()) ? 1.0 : 0.0;
+    if (!af.exists()) {
+        msg = "Không tìm thấy file kết quả!";
+        return 0.0;
+    }
+    if (!ef.open(QIODevice::ReadOnly) || !af.open(QIODevice::ReadOnly)) {
+        msg = "Không thể mở file so sánh!";
+        return 0.0;
+    }
+    if (ef.readAll() == af.readAll()) {
+        msg = "Kết quả khớp!";
+        return 1.0;
+    }
+    msg = "Kết quả khác đáp án!";
+    return 0.0;
 }
 
 double Judger::checkOutput(const QString &expectedFile,
@@ -310,25 +390,25 @@ double Judger::checkOutput(const QString &expectedFile,
 {
     switch (type) {
     case CheckerType::C1LinesWordsIgnoreCase:
-        return checkLinesWords(expectedFile, actualFile, false);
+        return checkLinesWords(expectedFile, actualFile, false, msg);
 
     case CheckerType::C2LinesWordsCase:
-        return checkLinesWords(expectedFile, actualFile, true);
+        return checkLinesWords(expectedFile, actualFile, true, msg);
 
     case CheckerType::C3WordsIgnoreCase:
-        return checkWords(expectedFile, actualFile, false);
+        return checkWords(expectedFile, actualFile, false, msg);
 
     case CheckerType::C4WordsCase:
-        return checkWords(expectedFile, actualFile, true);
+        return checkWords(expectedFile, actualFile, true, msg);
 
     case CheckerType::C5Binary:
-        return checkBinary(expectedFile, actualFile);
+        return checkBinary(expectedFile, actualFile, msg);
 
     case CheckerType::C6AMM2External:
     case CheckerType::C7External: {
         // External checker: receive via stdin: line1=testDir, line2=workDir
         // Output: last line is score (0.00..1.00)
-        if (checkerExe.isEmpty()) { msg = "No external checker configured"; return 0.0; }
+        if (checkerExe.isEmpty()) { msg = "Không tìm thấy trình chấm ngoài!"; return 0.0; }
         QProcess p;
         p.setWorkingDirectory(workDir);
         p.start(checkerExe, {expectedFile, actualFile, testDir});
@@ -337,10 +417,19 @@ double Judger::checkOutput(const QString &expectedFile,
         p.waitForFinished(10000);
         QString out = QString::fromLocal8Bit(p.readAllStandardOutput()).trimmed();
         QStringList lines = out.split('\n', Qt::SkipEmptyParts);
-        bool ok; double score = 0.0;
-        if (!lines.isEmpty()) score = lines.last().toDouble(&ok);
+        bool ok = false; double score = 0.0;
+        if (!lines.isEmpty()) {
+            score = lines.last().toDouble(&ok);
+            if (lines.size() > 1) {
+                msg = lines.first();
+            }
+        }
+        if (msg.isEmpty()) {
+            msg = (score >= 1.0) ? "Kết quả đúng!" : ((score > 0.0) ? QString("Đúng một phần (%1%)").arg(score * 100, 0, 'f', 1) : "Kết quả sai!");
+        }
         return (ok && score >= 0.0 && score <= 1.0) ? score : 0.0;
     }
     }
+    msg = "Không xác định được bộ chấm";
     return 0.0;
 }

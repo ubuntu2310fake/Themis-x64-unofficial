@@ -42,8 +42,8 @@ public:
 private:
     // Checker internals
     static double checkLinesWords(const QString &expected, const QString &actual,
-                                  bool caseSensitive);
+                                  bool caseSensitive, QString &msg);
     static double checkWords(const QString &expected, const QString &actual,
-                             bool caseSensitive);
-    static double checkBinary(const QString &expected, const QString &actual);
+                             bool caseSensitive, QString &msg);
+    static double checkBinary(const QString &expected, const QString &actual, QString &msg);
 };

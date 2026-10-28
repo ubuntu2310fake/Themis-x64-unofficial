@@ -117,8 +117,39 @@ TestResult Judger::execute(const QString &exeFile,
             // Might be MLE killed by JobObject, or RTE
             if (res.memKb >= memLimitMb * 1024 * 0.95) {
                 res.verdict = Verdict::MLE;
+                res.checkerMsg = "Chạy quá bộ nhớ";
             } else {
                 res.verdict = Verdict::RTE;
+                if (exitCode == 0xC00000FD) {
+                    res.checkerMsg = "Chạy sinh lỗi: Tràn ngăn xếp (Stack overflow, exit code: 0xC00000FD)";
+                } else if (exitCode == 0xC0000005) {
+                    res.checkerMsg = "Chạy sinh lỗi: Vi phạm truy cập bộ nhớ (Access violation, exit code: 0xC0000005)";
+                } else if (exitCode == 0xC0000094) {
+                    res.checkerMsg = "Chạy sinh lỗi: Chia cho 0 (Integer division by zero, exit code: 0xC0000094)";
+                } else if (exitCode == 0xC000008C) {
+                    res.checkerMsg = "Chạy sinh lỗi: Vượt quá giới hạn mảng (Array bounds exceeded, exit code: 0xC000008C)";
+                } else if (exitCode == 0xC000001D) {
+                    res.checkerMsg = "Chạy sinh lỗi: Lệnh không hợp lệ (Illegal instruction, exit code: 0xC000001D)";
+                } else if (exitCode == 0xC0000025) {
+                    res.checkerMsg = "Chạy sinh lỗi: Ngoại lệ không thể tiếp tục (Noncontinuable exception, exit code: 0xC0000025)";
+                } else if (exitCode == 201) {
+                    res.checkerMsg = "Chạy sinh lỗi: Vượt quá giới hạn (Range check error, exit code: 201)";
+                } else if (exitCode == 202) {
+                    res.checkerMsg = "Chạy sinh lỗi: Tràn ngăn xếp (Stack overflow, exit code: 202)";
+                } else if (exitCode == 203) {
+                    res.checkerMsg = "Chạy sinh lỗi: Tràn bộ nhớ heap (Heap overflow, exit code: 203)";
+                } else if (exitCode == 204) {
+                    res.checkerMsg = "Chạy sinh lỗi: Thao tác con trỏ không hợp lệ (Invalid pointer operation, exit code: 204)";
+                } else if (exitCode == 215) {
+                    res.checkerMsg = "Chạy sinh lỗi: Tràn số học (Arithmetic overflow, exit code: 215)";
+                } else if (exitCode == 216) {
+                    res.checkerMsg = "Chạy sinh lỗi: Lỗi bảo vệ bộ nhớ (General protection fault / Access violation, exit code: 216)";
+                } else if (exitCode > 0x80000000) {
+                    res.checkerMsg = QString("Chạy sinh lỗi: exit code: %1 (Hexadecimal: 0x%2)")
+                                     .arg((long)(int)exitCode).arg(exitCode, 8, 16, QChar('0')).toUpper();
+                } else {
+                    res.checkerMsg = QString("Chạy sinh lỗi: exit code: %1").arg(exitCode);
+                }
             }
         } else {
             res.verdict = Verdict::Judging;

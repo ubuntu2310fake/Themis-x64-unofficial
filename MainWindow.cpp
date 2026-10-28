@@ -252,6 +252,9 @@ void MainWindow::buildCentralWidget()
             this, &MainWindow::onColumnRightClick);
     connect(m_table->horizontalHeader(), &QHeaderView::sectionDoubleClicked,
             this, &MainWindow::onHeaderDoubleClick);
+    m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_table, &QTableWidget::customContextMenuRequested,
+            this, &MainWindow::onTableContextMenu);
     connect(m_table, &QTableWidget::cellDoubleClicked,
             this, &MainWindow::onRowDoubleClick);
 
@@ -403,6 +406,7 @@ void MainWindow::onLoadTasks()
     }
 
     rebuildTableColumns();
+    loadExistingScores();
     setWindowTitle("Θέμις - " + QDir(dir).dirName());
     updateActionStates();
     statusBar()->showMessage("Đã nạp " + QString::number(m_tasks.size()) + " bài thi.", 3000);
@@ -419,6 +423,7 @@ void MainWindow::onRefreshTasks()
         }
     }
     rebuildTableColumns();
+    loadExistingScores();
     updateActionStates();
 }
 
@@ -458,6 +463,7 @@ void MainWindow::onLoadContestants()
     }
 
     updateActionStates();
+    loadExistingScores();
     statusBar()->showMessage("Đã nạp " + QString::number(m_contestants.size()) + " thí sinh.", 3000);
 }
 
@@ -473,6 +479,7 @@ void MainWindow::onRefreshContestants()
         }
     }
     updateActionStates();
+    loadExistingScores();
 }
 
 void MainWindow::onSelectAllContestants()   { statusBar()->showMessage("Đã chọn tất cả thí sinh.", 2000); }
@@ -480,6 +487,34 @@ void MainWindow::onDeselectAllContestants() { statusBar()->showMessage("Đã b�
 void MainWindow::onToggleContestants()      { statusBar()->showMessage("Đã chọn ↔ bỏ chọn thí sinh.", 2000); }
 
 // ─── Slots: Chấm bài ─────────────────────────────────────────────────────────
+void MainWindow::runJudge(const QStringList &contestants, const QStringList &tasks)
+{
+    if (contestants.isEmpty() || tasks.isEmpty()) return;
+
+    JudgeEngine::ContestConfig cfg;
+    cfg.tasksDir        = m_tasksDir;
+    cfg.contestantsDir  = m_contestantsDir;
+    cfg.taskNames       = tasks;
+    cfg.contestantNames = contestants;
+    cfg.compilers       = m_compilerEntries;
+
+    auto *engine = new JudgeEngine(cfg, this);
+    auto *dlg    = new JudgeDialog(engine, this);
+
+    connect(engine, &JudgeEngine::updateReady, this, &MainWindow::onJudgeUpdate);
+
+    connect(dlg, &JudgeDialog::judgeFinished, this, [this](const QMap<QString, QMap<QString, double>> &scores) {
+        Q_UNUSED(scores);
+        loadExistingScores();
+        statusBar()->showMessage("✔ Chấm bài hoàn tất!", 5000);
+    });
+
+    engine->start();
+    dlg->exec();
+    delete dlg;
+    engine->deleteLater();
+}
+
 void MainWindow::onJudge()
 {
     if (m_tasks.isEmpty() || m_contestants.isEmpty()) {
@@ -499,63 +534,8 @@ void MainWindow::onJudge()
     for (const QString &t : m_tasks) {
         if (m_selectedTasks.contains(t)) activeTasks.append(t);
     }
-    
-    // Build engine config
-    JudgeEngine::ContestConfig cfg;
-    cfg.tasksDir        = m_tasksDir;
-    cfg.contestantsDir  = m_contestantsDir;
-    cfg.taskNames       = activeTasks;
-    cfg.contestantNames = activeContestants;
-    cfg.compilers       = m_compilerEntries;
 
-    auto *engine = new JudgeEngine(cfg, this);
-    auto *dlg    = new JudgeDialog(engine, this);
-
-    // When judging finishes, update the scoreboard table
-    connect(dlg, &JudgeDialog::judgeFinished, this,
-            [this](const QMap<QString, QMap<QString, double>> &scores) {
-        // Rebuild column headers
-        rebuildTableColumns();
-
-        for (int r = 0; r < m_table->rowCount(); ++r) {
-            QString name = m_contestants[r];
-            double  total = 0.0;
-
-            for (int ti = 0; ti < m_tasks.size(); ++ti) {
-                QString task = m_tasks[ti];
-                double  s    = scores.value(name).value(task, -1.0);
-                int     col  = ti + 1;
-
-                auto *cell = m_table->item(r, col);
-                if (!cell) { cell = new QTableWidgetItem(); m_table->setItem(r, col, cell); }
-
-                if (s < 0) {
-                    cell->setText("—");
-                    cell->setForeground(QColor(150,150,150));
-                } else {
-                    cell->setText(QString::number(s, 'f', 2));
-                    cell->setTextAlignment(Qt::AlignCenter);
-                    cell->setForeground(s > 0 ? QColor(0,100,0) : QColor(180,0,0));
-                }
-                if (s > 0) total += s;
-            }
-
-            // Total column
-            int lastCol = m_tasks.size() + 1;
-            auto *totCell = m_table->item(r, lastCol);
-            if (!totCell) { totCell = new QTableWidgetItem(); m_table->setItem(r, lastCol, totCell); }
-            totCell->setText(QString::number(total, 'f', 2));
-            totCell->setTextAlignment(Qt::AlignCenter);
-            totCell->setForeground(QColor(0, 0, 150));
-            QFont bf = totCell->font(); bf.setBold(true); totCell->setFont(bf);
-        }
-        statusBar()->showMessage("✔ Chấm bài hoàn tất!", 5000);
-    });
-
-    engine->start();
-    dlg->exec();
-    delete dlg;
-    engine->deleteLater();
+    runJudge(activeContestants, activeTasks);
 }
 
 void MainWindow::onOnlineJudge()
@@ -684,21 +664,7 @@ void MainWindow::onColumnRightClick(const QPoint &pos)
             }
         }
         if (activeContestants.isEmpty()) return;
-        
-        JudgeEngine::ContestConfig cfg;
-        cfg.tasksDir        = m_tasksDir;
-        cfg.contestantsDir  = m_contestantsDir;
-        cfg.taskNames       = {taskName};
-        cfg.contestantNames = activeContestants;
-        cfg.compilers       = m_compilerEntries;
-
-        auto *engine = new JudgeEngine(cfg, this);
-        auto *dlg    = new JudgeDialog(engine, this);
-        connect(engine, &JudgeEngine::updateReady, this, &MainWindow::onJudgeUpdate);
-        engine->start();
-        dlg->exec();
-        delete dlg;
-        engine->deleteLater();
+        runJudge(activeContestants, {taskName});
     } else if (res == actDeselect) {
         // Toggle task selection
         if (isSelected) m_selectedTasks.remove(taskName);
@@ -719,21 +685,86 @@ void MainWindow::onHeaderDoubleClick(int col)
     }
 }
 
+void MainWindow::onTableContextMenu(const QPoint &pos)
+{
+    QTableWidgetItem *item = m_table->itemAt(pos);
+    if (!item) return;
+
+    int row = item->row();
+    int col = item->column();
+    if (row < 0 || row >= m_contestants.size()) return;
+
+    QString contestant = m_contestants[row];
+    QMenu menu(this);
+
+    if (col >= 1 && col <= m_tasks.size()) {
+        QString taskName = m_tasks[col - 1];
+
+        QAction *actConfig  = menu.addAction(QIcon(":/btnsettings.png"), "Cấu hình bài thi: " + taskName);
+        QAction *actClear   = menu.addAction("Xóa điểm: " + taskName);
+        QAction *actRejudge = menu.addAction(QIcon(":/btnjudge.png"), "Chấm lại bài này: " + taskName);
+        QAction *actDetail  = menu.addAction("Chi tiết chấm: " + taskName);
+
+        QAction *selected = menu.exec(m_table->viewport()->mapToGlobal(pos));
+        if (selected == actConfig) {
+            onHeaderDoubleClick(col);
+        } else if (selected == actClear) {
+            item->setText("");
+            recalculateRowTotal(row);
+        } else if (selected == actRejudge) {
+            runJudge({contestant}, {taskName});
+        } else if (selected == actDetail) {
+            QString logPath = m_contestantsDir + "/Logs/" + contestant + ".log";
+            DetailDialog dlg(contestant, logPath, taskName, this);
+            dlg.exec();
+        }
+    } else if (col == 0) {
+        QAction *actClear   = menu.addAction("Xóa tất cả điểm của thí sinh: " + contestant);
+        QAction *actRejudge = menu.addAction(QIcon(":/btnjudge.png"), "Chấm lại thí sinh: " + contestant);
+        QAction *actDetail  = menu.addAction("Chi tiết chấm: " + contestant);
+
+        QAction *selected = menu.exec(m_table->viewport()->mapToGlobal(pos));
+        if (selected == actClear) {
+            for (int c = 1; c < m_table->columnCount(); ++c) {
+                if (m_table->item(row, c)) m_table->item(row, c)->setText("");
+            }
+            recalculateRowTotal(row);
+        } else if (selected == actRejudge) {
+            runJudge({contestant}, m_tasks);
+        } else if (selected == actDetail) {
+            QString logPath = m_contestantsDir + "/Logs/" + contestant + ".log";
+            DetailDialog dlg(contestant, logPath, QString(), this);
+            dlg.exec();
+        }
+    }
+}
+
 void MainWindow::onRowDoubleClick(int row, int col)
 {
-    Q_UNUSED(col);
     if (row < 0 || row >= m_contestants.size()) return;
     
     QString contestant = m_contestants[row];
     QString logPath = m_contestantsDir + "/Logs/" + contestant + ".log";
-    DetailDialog dlg(contestant, logPath, this);
-    dlg.exec();
+    if (col >= 1 && col <= m_tasks.size()) {
+        QString taskName = m_tasks[col - 1];
+        DetailDialog dlg(contestant, logPath, taskName, this);
+        dlg.exec();
+    } else {
+        DetailDialog dlg(contestant, logPath, QString(), this);
+        dlg.exec();
+    }
 }
 
 void MainWindow::onJudgeUpdate(const JudgeUpdate &update)
 {
     int row = m_contestants.indexOf(update.contestantName);
-    int col = m_tasks.indexOf(update.taskName) + 1;
+    int col = -1;
+    for (int i = 0; i < m_tasks.size(); ++i) {
+        if (m_tasks[i].compare(update.taskName, Qt::CaseInsensitive) == 0) {
+            col = i + 1;
+            break;
+        }
+    }
     if (row < 0 || col <= 0) return;
 
     QTableWidgetItem *cell = m_table->item(row, col);
@@ -743,25 +774,97 @@ void MainWindow::onJudgeUpdate(const JudgeUpdate &update)
         m_table->setItem(row, col, cell);
     }
     cell->setText(QString::number(update.taskScore, 'f', 2));
+    cell->setForeground(update.taskScore > 0 ? QColor(0, 100, 0) : QColor(180, 0, 0));
     
-    // Also recalculate total for this contestant
-    double total = 0;
+    recalculateRowTotal(row);
+}
+
+void MainWindow::recalculateRowTotal(int row)
+{
+    if (row < 0 || row >= m_table->rowCount()) return;
+    double total = 0.0;
+    bool hasAny = false;
     for (int c = 1; c <= m_tasks.size(); ++c) {
-        if (m_table->item(row, c) && !m_table->item(row, c)->text().isEmpty()) {
-            total += m_table->item(row, c)->text().toDouble();
+        QTableWidgetItem *it = m_table->item(row, c);
+        if (it && !it->text().isEmpty() && it->text() != "—") {
+            total += it->text().toDouble();
+            hasAny = true;
         }
     }
-    
     int totalCol = m_tasks.size() + 1;
-    QTableWidgetItem *totalCell = m_table->item(row, totalCol);
-    if (!totalCell) {
-        totalCell = new QTableWidgetItem();
-        totalCell->setTextAlignment(Qt::AlignCenter);
-        QFont f = totalCell->font();
-        f.setBold(true);
-        totalCell->setFont(f);
-        totalCell->setForeground(QBrush(QColor("#000080")));
-        m_table->setItem(row, totalCol, totalCell);
+    QTableWidgetItem *totCell = m_table->item(row, totalCol);
+    if (!totCell) {
+        totCell = new QTableWidgetItem();
+        totCell->setTextAlignment(Qt::AlignCenter);
+        QFont f = totCell->font(); f.setBold(true); totCell->setFont(f);
+        totCell->setForeground(QColor(0, 0, 150));
+        m_table->setItem(row, totalCol, totCell);
     }
-    totalCell->setText(QString::number(total, 'f', 2));
+    totCell->setText(hasAny ? QString::number(total, 'f', 2) : "");
+}
+
+void MainWindow::loadExistingScores()
+{
+    if (m_contestantsDir.isEmpty() || m_tasks.isEmpty()) return;
+
+    for (int r = 0; r < m_contestants.size(); ++r) {
+        QString name = m_contestants[r];
+        QString logPath = m_contestantsDir + "/Logs/" + name + ".log";
+        QFile logFile(logPath);
+        if (!logFile.exists() || !logFile.open(QIODevice::ReadOnly | QIODevice::Text))
+            continue;
+
+        QTextStream in(&logFile);
+        QString currentTask;
+        double currentTaskScore = -1.0;
+        double currentTaskSum = 0.0;
+        bool hasTests = false;
+
+        auto applyCurrentTask = [&]() {
+            if (currentTask.isEmpty()) return;
+            int col = -1;
+            for (int i = 0; i < m_tasks.size(); ++i) {
+                if (m_tasks[i].compare(currentTask, Qt::CaseInsensitive) == 0) {
+                    col = i + 1;
+                    break;
+                }
+            }
+            if (col > 0) {
+                double finalScore = (currentTaskScore >= 0.0) ? currentTaskScore : (hasTests ? currentTaskSum : -1.0);
+                if (finalScore >= 0.0) {
+                    QTableWidgetItem *cell = m_table->item(r, col);
+                    if (!cell) {
+                        cell = new QTableWidgetItem();
+                        cell->setTextAlignment(Qt::AlignCenter);
+                        m_table->setItem(r, col, cell);
+                    }
+                    cell->setText(QString::number(finalScore, 'f', 2));
+                    cell->setForeground(finalScore > 0 ? QColor(0, 100, 0) : QColor(180, 0, 0));
+                }
+            }
+        };
+
+        while (!in.atEnd()) {
+            QString line = in.readLine().trimmed();
+            if (line.startsWith("[") && line.endsWith("]")) {
+                applyCurrentTask();
+                currentTask = line.mid(1, line.length() - 2);
+                currentTaskScore = -1.0;
+                currentTaskSum = 0.0;
+                hasTests = false;
+            } else if (line.startsWith("Score=")) {
+                currentTaskScore = line.mid(6).toDouble();
+            } else if (line.contains("|")) {
+                QStringList parts = line.split("|");
+                if (parts.size() >= 5) {
+                    hasTests = true;
+                    currentTaskSum += parts[4].toDouble();
+                }
+            }
+        }
+        applyCurrentTask();
+        logFile.close();
+
+        recalculateRowTotal(r);
+    }
 }

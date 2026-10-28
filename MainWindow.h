@@ -55,6 +55,7 @@ private slots:
 
     // ── Internal ──
     void onColumnRightClick(const QPoint &pos);
+    void onTableContextMenu(const QPoint &pos);
     void onRowDoubleClick(int row, int col);
     void onHeaderDoubleClick(int col);
 
@@ -67,6 +68,9 @@ private:
     void updateActionStates();
     void rebuildTableColumns();
     void addContestantRow(const QString &name);
+    void runJudge(const QStringList &contestants, const QStringList &tasks);
+    void loadExistingScores();
+    void recalculateRowTotal(int row);
 
     // Data
     QStringList m_tasks;

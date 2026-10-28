@@ -59,6 +59,7 @@ struct TestResult {
 // ─── One task result for one contestant ──────────────────────────────────────
 struct TaskResult {
     QString  taskName;
+    QString  sourceFile;         // e.g. "TASK.cpp"
     Verdict  verdict    = Verdict::Pending;
     double   totalScore = 0.0;
     QString  ceLog;              // compilation error output

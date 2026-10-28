@@ -47,6 +47,19 @@ QList<CompilerEntry> CompilerConfigDialog::defaultEntries()
     if (!QFile::exists(appDir + "/PYTHON/python.exe")) py3 = which("python3");
 #endif
 
+#ifdef Q_OS_WIN
+    return {
+        { ".cpp",   gpp  + " -O2 -x c++ \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\" -Wl,--stack,66060288" },
+        { ".c",     gcc  + " -O2 -x c \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\" -pipe -lm -Wl,--stack,66060288" },
+        { ".pas",   fpc  + " -O2 -XS -Sg \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\"" },
+        { ".pp",    fpc  + " -O2 -XS -Sg \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\"" },
+        { ".java",  java + " \"%PATH%%NAME%%EXT%\"|@WorkDir=\"%PATH%\"" },
+        { ".exe",   ";Nếu không muốn dịch lại khi đã có file .exe, chuyển loại file này lên đầu" },
+        { ".class", ";Nếu không muốn dịch lại khi đã có file .class, chuyển loại file này lên đầu" },
+        { "",       ";Linux ELF binary – Chạy trực tiếp (không cần biên dịch), chuyển loại file này lên đầu để ưu tiên" },
+        { ".py",    py3 },
+    };
+#else
     return {
         { ".cpp",   gpp  + " -O2 -x c++ \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\"" },
         { ".c",     gcc  + " -O2 -x c \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\" -pipe -lm" },
@@ -58,6 +71,7 @@ QList<CompilerEntry> CompilerConfigDialog::defaultEntries()
         { "",       ";Linux ELF binary – Chạy trực tiếp (không cần biên dịch), chuyển loại file này lên đầu để ưu tiên" },
         { ".py",    py3 },
     };
+#endif
 }
 
 // ─── Constructor ─────────────────────────────────────────────────────────────
