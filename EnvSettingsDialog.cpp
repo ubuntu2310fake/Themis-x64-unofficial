@@ -9,6 +9,7 @@
 #include <QProcess>
 #include <QTabWidget>
 #include <QDir>
+#include <QSettings>
 // ─── Helper: auto-detect a binary ─────────────────────────────────────────────
 static QString whichBin(const QString &bin)
 {
@@ -92,6 +93,20 @@ EnvSettingsDialog::EnvSettingsDialog(QWidget *parent) : QDialog(parent)
     m_chkShowToolbar->setChecked(true);
     formGen->addRow("", m_chkShowToolbar);
 
+    // Linux Compatibility Group
+    QGroupBox *grpCompat = new QGroupBox("Tương thích tệp tin trên Linux (File Compatibility)", tabGeneral);
+    QVBoxLayout *layCompat = new QVBoxLayout(grpCompat);
+    m_chkAutoFreopen = new QCheckBox("Tự động đọc freopen trong mã nguồn để tạo file input/output (không phân biệt hoa thường)", grpCompat);
+    m_chkAutoFreopen->setChecked(true);
+    layCompat->addWidget(m_chkAutoFreopen);
+    QLabel *lblFreopenHint = new QLabel(
+        "<i style='color:gray; font-size:10px;'>"
+        "Tự động phân tích các lệnh freopen, assign, open, ifstream/ofstream trong bài làm thí sinh<br/>"
+        "để tạo file INP và nhận file OUT đúng tên, khắc phục triệt để lỗi phân biệt hoa thường trên Linux.</i>", grpCompat);
+    lblFreopenHint->setTextFormat(Qt::RichText);
+    layCompat->addWidget(lblFreopenHint);
+    formGen->addRow(grpCompat);
+
     tabs->addTab(tabGeneral, "Cài đặt chung");
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -154,6 +169,18 @@ EnvSettingsDialog::EnvSettingsDialog(QWidget *parent) : QDialog(parent)
 
     mainLay->addWidget(tabs);
 
+    // Load saved settings
+    QSettings settings("ThemisLinux", "ThemisLinux");
+    if (settings.contains("OnlineDir")) m_edtOnlineDir->setText(settings.value("OnlineDir").toString());
+    if (settings.contains("ExtractDir")) m_edtExtractDir->setText(settings.value("ExtractDir").toString());
+    if (settings.contains("ExamRoomDir")) m_edtExamRoomDir->setText(settings.value("ExamRoomDir").toString());
+    if (settings.contains("NumFormat")) m_edtNumFormat->setText(settings.value("NumFormat").toString());
+    if (settings.contains("ShowToolbar")) m_chkShowToolbar->setChecked(settings.value("ShowToolbar").toBool());
+    if (settings.contains("AutoFreopen")) m_chkAutoFreopen->setChecked(settings.value("AutoFreopen").toBool());
+    if (settings.contains("Terminal")) m_edtTerminal->setText(settings.value("Terminal").toString());
+    if (settings.contains("FileManager")) m_edtFileManager->setText(settings.value("FileManager").toString());
+    if (settings.contains("TextEditor")) m_edtTextEditor->setText(settings.value("TextEditor").toString());
+
     // ── Buttons ───────────────────────────────────────────────────────────────
     QDialogButtonBox *box = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -162,4 +189,19 @@ EnvSettingsDialog::EnvSettingsDialog(QWidget *parent) : QDialog(parent)
     connect(box, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(box, &QDialogButtonBox::rejected, this, &QDialog::reject);
     mainLay->addWidget(box);
+}
+
+void EnvSettingsDialog::accept()
+{
+    QSettings settings("ThemisLinux", "ThemisLinux");
+    settings.setValue("OnlineDir", m_edtOnlineDir->text());
+    settings.setValue("ExtractDir", m_edtExtractDir->text());
+    settings.setValue("ExamRoomDir", m_edtExamRoomDir->text());
+    settings.setValue("NumFormat", m_edtNumFormat->text());
+    settings.setValue("ShowToolbar", m_chkShowToolbar->isChecked());
+    settings.setValue("AutoFreopen", m_chkAutoFreopen->isChecked());
+    settings.setValue("Terminal", m_edtTerminal->text());
+    settings.setValue("FileManager", m_edtFileManager->text());
+    settings.setValue("TextEditor", m_edtTextEditor->text());
+    QDialog::accept();
 }

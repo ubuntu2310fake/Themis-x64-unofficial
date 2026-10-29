@@ -27,6 +27,7 @@ public:
         QStringList taskNames;
         QList<CompilerEntry> compilers;
         QString  workDir;           // temp working directory
+        bool     autoFreopen = true;
     };
 
     explicit JudgeWorker(const Config &cfg, QObject *parent = nullptr);
@@ -58,6 +59,7 @@ public:
         QStringList taskNames;
         QStringList contestantNames;
         QList<CompilerEntry> compilers;
+        bool     autoFreopen = true;
     };
 
     explicit JudgeEngine(const ContestConfig &cfg, QObject *parent = nullptr);

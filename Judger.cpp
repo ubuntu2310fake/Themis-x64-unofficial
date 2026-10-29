@@ -380,6 +380,45 @@ double Judger::checkBinary(const QString &expPath, const QString &actPath, QStri
     return 0.0;
 }
 
+static bool isWindowsExecutable(const QString &path)
+{
+    QFile f(path);
+    if (f.open(QIODevice::ReadOnly)) {
+        QByteArray magic = f.read(2);
+        f.close();
+        return (magic == "MZ");
+    }
+    return false;
+}
+
+static void launchCheckerProcess(QProcess &p, const QString &checkerExe, const QStringList &args, const QString &workDir)
+{
+    p.setWorkingDirectory(workDir);
+    if (checkerExe.endsWith(".py", Qt::CaseInsensitive)) {
+        QStringList fullArgs;
+        fullArgs << checkerExe << args;
+        p.start("python3", fullArgs);
+    } else if (checkerExe.endsWith(".sh", Qt::CaseInsensitive)) {
+        QStringList fullArgs;
+        fullArgs << checkerExe << args;
+        p.start("bash", fullArgs);
+    } else if (checkerExe.endsWith(".exe", Qt::CaseInsensitive) || isWindowsExecutable(checkerExe)) {
+        static bool hasWine = QFile::exists("/usr/bin/wine") || QFile::exists("/bin/wine");
+        if (hasWine) {
+            QStringList fullArgs;
+            fullArgs << checkerExe << args;
+            p.start("wine", fullArgs);
+        } else {
+            p.start(checkerExe, args);
+        }
+    } else {
+        QFile::setPermissions(checkerExe, QFile::permissions(checkerExe) |
+            QFileDevice::ExeOwner | QFileDevice::ExeUser |
+            QFileDevice::ExeGroup | QFileDevice::ExeOther);
+        p.start(checkerExe, args);
+    }
+}
+
 double Judger::checkOutput(const QString &expectedFile,
                            const QString &actualFile,
                            CheckerType   type,
@@ -404,30 +443,115 @@ double Judger::checkOutput(const QString &expectedFile,
     case CheckerType::C5Binary:
         return checkBinary(expectedFile, actualFile, msg);
 
-    case CheckerType::C6AMM2External:
-    case CheckerType::C7External: {
-        // External checker: receive via stdin: line1=testDir, line2=workDir
-        // Output: last line is score (0.00..1.00)
-        if (checkerExe.isEmpty()) { msg = "Không tìm thấy trình chấm ngoài!"; return 0.0; }
+    case CheckerType::C6AMM2External: {
+        if (checkerExe.isEmpty()) {
+            msg = "Không tìm thấy trình chấm ngoài (AMM2)!";
+            return 0.0;
+        }
+        QString inpPath = workDir + "/COMPAR$R.INP";
+        QString outPath = workDir + "/COMPAR$R.OUT";
+        QFile::remove(outPath);
+        QFile fi(inpPath);
+        if (fi.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream(&fi) << testDir << "\n";
+            fi.close();
+        }
+
         QProcess p;
-        p.setWorkingDirectory(workDir);
-        p.start(checkerExe, {expectedFile, actualFile, testDir});
-        p.write((testDir + "\n" + workDir + "\n").toLocal8Bit());
-        p.closeWriteChannel();
+        launchCheckerProcess(p, checkerExe, {expectedFile, actualFile, testDir}, workDir);
         p.waitForFinished(10000);
-        QString out = QString::fromLocal8Bit(p.readAllStandardOutput()).trimmed();
-        QStringList lines = out.split('\n', Qt::SkipEmptyParts);
-        bool ok = false; double score = 0.0;
+
+        QFile fo(outPath);
+        if (!fo.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            msg = "Trình chấm ngoài AMM2 không tạo COMPAR$R.OUT!";
+            return 0.0;
+        }
+        QByteArray rawOut = fo.readAll();
+        fo.close();
+        if (rawOut.startsWith("\xEF\xBB\xBF")) rawOut = rawOut.mid(3);
+        QString out = QString::fromUtf8(rawOut).trimmed();
+        QStringList lines = out.split('\n');
+        for (QString &l : lines) l = l.trimmed();
+        while (!lines.isEmpty() && lines.last().isEmpty()) lines.removeLast();
+
+        if (lines.isEmpty()) {
+            msg = "COMPAR$R.OUT rỗng!";
+            return 0.0;
+        }
+        QString first = lines.first();
+        lines.removeFirst();
+        double score = 0.0;
+        if (first.startsWith("DUNG", Qt::CaseInsensitive) && !first.startsWith("DUNGMOTPHAN", Qt::CaseInsensitive)) {
+            score = 1.0;
+            msg = lines.isEmpty() ? "Kết quả đúng!" : lines.join(" ");
+        } else if (first.startsWith("DUNGMOTPHAN", Qt::CaseInsensitive)) {
+            QString rest = first.mid(QString("DUNGMOTPHAN").length()).trimmed();
+            bool ok = false;
+            double pct = rest.toDouble(&ok);
+            if (ok && pct >= 0.0) score = pct / 100.0;
+            if (score > 1.0) score = 1.0;
+            msg = lines.isEmpty() ? QString("Đúng một phần (%1%)").arg(pct) : lines.join(" ");
+        } else {
+            score = 0.0;
+            msg = lines.isEmpty() ? "Kết quả sai!" : lines.join(" ");
+        }
+        return score;
+    }
+
+    case CheckerType::C7External: {
+        if (checkerExe.isEmpty()) {
+            msg = "Không tìm thấy trình chấm ngoài (Check*.exe)!";
+            return 0.0;
+        }
+        QProcess p;
+        launchCheckerProcess(p, checkerExe, {expectedFile, actualFile, testDir}, workDir);
+
+        QString tDir = testDir.endsWith('/') ? testDir : (testDir + "/");
+        QString wDir = workDir.endsWith('/') ? workDir : (workDir + "/");
+        p.write((tDir + "\n" + wDir + "\n").toUtf8());
+        p.closeWriteChannel();
+
+        if (!p.waitForFinished(10000)) {
+            p.kill();
+            msg = "Trình chấm ngoài chạy quá thời gian (TLE)!";
+            return 0.0;
+        }
+
+        if (p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) {
+            msg = "Trình chấm ngoài sinh lỗi khi chấm (RTE)!";
+            return 0.0;
+        }
+
+        QByteArray rawOut = p.readAllStandardOutput();
+        if (rawOut.startsWith("\xEF\xBB\xBF")) rawOut = rawOut.mid(3);
+        QString out = QString::fromUtf8(rawOut).trimmed();
+        QStringList lines = out.split('\n');
+        for (QString &l : lines) l = l.trimmed();
+        while (!lines.isEmpty() && lines.last().isEmpty()) lines.removeLast();
+
+        bool ok = false;
+        double score = 0.0;
         if (!lines.isEmpty()) {
             score = lines.last().toDouble(&ok);
-            if (lines.size() > 1) {
-                msg = lines.first();
+            if (ok) {
+                lines.removeLast();
+                if (!lines.isEmpty()) {
+                    msg = lines.join(" ");
+                }
+            } else {
+                msg = lines.join(" ");
             }
         }
+        if (!ok) {
+            msg = "Trình chấm ngoài không xuất điểm hợp lệ ở dòng cuối!";
+            return 0.0;
+        }
+        if (score < 0.0) score = 0.0;
+        if (score > 1.0) score = 1.0;
         if (msg.isEmpty()) {
             msg = (score >= 1.0) ? "Kết quả đúng!" : ((score > 0.0) ? QString("Đúng một phần (%1%)").arg(score * 100, 0, 'f', 1) : "Kết quả sai!");
         }
-        return (ok && score >= 0.0 && score <= 1.0) ? score : 0.0;
+        return score;
     }
     }
     msg = "Không xác định được bộ chấm";

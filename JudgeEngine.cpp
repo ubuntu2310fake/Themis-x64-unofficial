@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QTextStream>
 #include <QCollator>
+#include <QRegularExpression>
 #include <algorithm>
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -55,6 +56,217 @@ const CompilerEntry* JudgeWorker::findCompiler(const QString &ext) const
     for (const CompilerEntry &e : m_cfg.compilers)
         if (e.ext == ext) return &e;
     return nullptr;
+}
+
+// ─── Source IO Detection (Linux Case Insensitivity & freopen adapter) ────────
+struct DetectedIO {
+    QString input;
+    QString output;
+};
+
+static DetectedIO detectIOFromSource(const QString &sourcePath)
+{
+    DetectedIO res;
+    QFile f(sourcePath);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return res;
+    }
+    // Read up to 128KB of source code
+    QString code = QString::fromUtf8(f.read(131072));
+    f.close();
+
+    // 1. freopen with "r" or 'r' (input)
+    // Examples: freopen("task.inp", "r", stdin); freopen("task.INP", "rt", stdin);
+    QRegularExpression reFreopenIn(R"(freopen\s*\(\s*["']([^"']+)["']\s*,\s*["'][rR][tT]?["']\s*,\s*stdin\s*\))");
+    auto match = reFreopenIn.match(code);
+    if (match.hasMatch()) {
+        res.input = match.captured(1).trimmed();
+    }
+
+    // 2. freopen with "w" or 'w' (output)
+    // Examples: freopen("task.out", "w", stdout); freopen("task.OUT", "wt", stdout);
+    QRegularExpression reFreopenOut(R"(freopen\s*\(\s*["']([^"']+)["']\s*,\s*["'][wW][tT]?["']\s*,\s*stdout\s*\))");
+    match = reFreopenOut.match(code);
+    if (match.hasMatch()) {
+        res.output = match.captured(1).trimmed();
+    }
+
+    // 3. Pascal assign: assign(f, 'task.inp'); reset(f); or assign(output, 'task.out'); rewrite(output);
+    if (res.input.isEmpty()) {
+        QRegularExpression reAssignIn(R"(assign\s*\(\s*\w+\s*,\s*['"]([^'"]+\.(?:inp|in|txt))['"]\s*\))", QRegularExpression::CaseInsensitiveOption);
+        match = reAssignIn.match(code);
+        if (match.hasMatch()) {
+            res.input = match.captured(1).trimmed();
+        }
+    }
+    if (res.output.isEmpty()) {
+        QRegularExpression reAssignOut(R"(assign\s*\(\s*\w+\s*,\s*['"]([^'"]+\.(?:out|ans|txt))['"]\s*\))", QRegularExpression::CaseInsensitiveOption);
+        match = reAssignOut.match(code);
+        if (match.hasMatch()) {
+            res.output = match.captured(1).trimmed();
+        }
+    }
+
+    // 4. C++ ifstream / ofstream
+    if (res.input.isEmpty()) {
+        QRegularExpression reIfstream(R"((?:ifstream\s+\w+\s*\(|(?:fin|cin|fi)\.open\s*\()\s*["']([^"']+)["'])");
+        match = reIfstream.match(code);
+        if (match.hasMatch()) {
+            res.input = match.captured(1).trimmed();
+        }
+    }
+    if (res.output.isEmpty()) {
+        QRegularExpression reOfstream(R"((?:ofstream\s+\w+\s*\(|(?:fout|cout|fo)\.open\s*\()\s*["']([^"']+)["'])");
+        match = reOfstream.match(code);
+        if (match.hasMatch()) {
+            res.output = match.captured(1).trimmed();
+        }
+    }
+
+    // 5. Python open
+    if (res.input.isEmpty()) {
+        QRegularExpression rePyIn(R"((?:sys\.stdin\s*=\s*)?open\s*\(\s*["']([^"']+\.(?:inp|in|txt))["'](?:\s*,\s*["'][rR]["'])?\s*\))");
+        match = rePyIn.match(code);
+        if (match.hasMatch()) {
+            res.input = match.captured(1).trimmed();
+        }
+    }
+    if (res.output.isEmpty()) {
+        QRegularExpression rePyOut(R"((?:sys\.stdout\s*=\s*)?open\s*\(\s*["']([^"']+\.(?:out|ans|txt))["']\s*,\s*["'][wW]["']\s*\))");
+        match = rePyOut.match(code);
+        if (match.hasMatch()) {
+            res.output = match.captured(1).trimmed();
+        }
+    }
+
+    // 6. Generic string literal fallback for .inp and .out if still not found
+    if (res.input.isEmpty()) {
+        QRegularExpression reGenIn(R"(["']([^"']+\.(?:inp|in))["'])", QRegularExpression::CaseInsensitiveOption);
+        match = reGenIn.match(code);
+        if (match.hasMatch()) {
+            res.input = match.captured(1).trimmed();
+        }
+    }
+    if (res.output.isEmpty()) {
+        QRegularExpression reGenOut(R"(["']([^"']+\.(?:out|ans))["'])", QRegularExpression::CaseInsensitiveOption);
+        match = reGenOut.match(code);
+        if (match.hasMatch()) {
+            res.output = match.captured(1).trimmed();
+        }
+    }
+
+    if (!res.input.isEmpty()) res.input = QFileInfo(res.input).fileName();
+    if (!res.output.isEmpty()) res.output = QFileInfo(res.output).fileName();
+
+    return res;
+}
+
+// ─── External Checker Finder & Builder ────────────────────────────────────────
+static QString findOrBuildChecker(const QString &taskDir, const QString &taskName, CheckerType checkerType)
+{
+    QDir td(taskDir);
+    if (!td.exists()) return {};
+
+    QStringList baseNames;
+    if (checkerType == CheckerType::C7External) {
+        baseNames << ("Check" + taskName)
+                  << ("check" + taskName)
+                  << ("Check" + taskName.toLower())
+                  << ("check" + taskName.toLower())
+                  << "checker"
+                  << "check"
+                  << "chk";
+    } else {
+        baseNames << taskName
+                  << taskName.toLower()
+                  << taskName.toUpper();
+    }
+
+    // Try finding existing binary, script, or executable
+    for (const QString &base : baseNames) {
+        // 1. Native ELF or extensionless executable
+        QString noExt = td.filePath(base);
+        if (QFile::exists(noExt)) {
+            QFileInfo fi(noExt);
+            if (fi.isFile()) {
+                QFile::setPermissions(noExt, QFile::permissions(noExt) |
+                    QFileDevice::ExeOwner | QFileDevice::ExeUser |
+                    QFileDevice::ExeGroup | QFileDevice::ExeOther);
+                return noExt;
+            }
+        }
+        // 2. .exe
+        QString exePath = td.filePath(base + ".exe");
+        if (QFile::exists(exePath)) return exePath;
+
+        // 3. .py
+        QString pyPath = td.filePath(base + ".py");
+        if (QFile::exists(pyPath)) return pyPath;
+
+        // 4. .sh
+        QString shPath = td.filePath(base + ".sh");
+        if (QFile::exists(shPath)) {
+            QFile::setPermissions(shPath, QFile::permissions(shPath) |
+                QFileDevice::ExeOwner | QFileDevice::ExeUser |
+                QFileDevice::ExeGroup | QFileDevice::ExeOther);
+            return shPath;
+        }
+
+        // 5. .cpp source -> auto compile!
+        QString cppPath = td.filePath(base + ".cpp");
+        if (QFile::exists(cppPath)) {
+            QString binPath = td.filePath(base + "_linux");
+            QFileInfo fiCpp(cppPath);
+            QFileInfo fiBin(binPath);
+            if (!fiBin.exists() || fiBin.lastModified() < fiCpp.lastModified()) {
+                QProcess comp;
+                comp.start("g++", {"-O2", "-std=c++17", cppPath, "-o", binPath});
+                comp.waitForFinished(15000);
+            }
+            if (QFile::exists(binPath)) {
+                QFile::setPermissions(binPath, QFile::permissions(binPath) |
+                    QFileDevice::ExeOwner | QFileDevice::ExeUser |
+                    QFileDevice::ExeGroup | QFileDevice::ExeOther);
+                return binPath;
+            }
+        }
+
+        // 6. .pas source -> compile with fpc if available
+        QString pasPath = td.filePath(base + ".pas");
+        if (QFile::exists(pasPath)) {
+            QString binPath = td.filePath(base + "_linux");
+            QFileInfo fiPas(pasPath);
+            QFileInfo fiBin(binPath);
+            if (!fiBin.exists() || fiBin.lastModified() < fiPas.lastModified()) {
+                QProcess comp;
+                comp.start("fpc", {"-O2", "-o" + binPath, pasPath});
+                comp.waitForFinished(15000);
+            }
+            if (QFile::exists(binPath)) {
+                QFile::setPermissions(binPath, QFile::permissions(binPath) |
+                    QFileDevice::ExeOwner | QFileDevice::ExeUser |
+                    QFileDevice::ExeGroup | QFileDevice::ExeOther);
+                return binPath;
+            }
+        }
+    }
+
+    // Fallback: look for ANY file starting with "check" (case-insensitive) in taskDir
+    for (const QString &f : td.entryList(QDir::Files)) {
+        if (f.startsWith("check", Qt::CaseInsensitive)) {
+            QString full = td.filePath(f);
+            if (f.endsWith(".cpp", Qt::CaseInsensitive)) {
+                QString binPath = td.filePath(QFileInfo(f).baseName() + "_linux");
+                QProcess comp;
+                comp.start("g++", {"-O2", "-std=c++17", full, "-o", binPath});
+                comp.waitForFinished(15000);
+                if (QFile::exists(binPath)) return binPath;
+            }
+            return full;
+        }
+    }
+
+    return {};
 }
 
 // ─── Judge one task for one contestant ────────────────────────────────────────
@@ -156,6 +368,27 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
     double totalScore   = 0.0;
     bool allAC          = true;
 
+    QString checkerExe;
+    if (checker == CheckerType::C7External || checker == CheckerType::C6AMM2External) {
+        checkerExe = findOrBuildChecker(m_cfg.tasksDir + "/" + taskName, taskName, checker);
+        if (checkerExe.isEmpty()) {
+            emit logMessage(QString("[%1] Cảnh báo: Không tìm thấy trình chấm ngoài cho bài %2 (%3)")
+                                .arg(m_cfg.contestantName, taskName, cfg.evaluatorName));
+        } else {
+            emit logMessage(QString("[%1] Trình chấm ngoài bài %2: %3")
+                                .arg(m_cfg.contestantName, taskName, checkerExe));
+        }
+    }
+
+    DetectedIO detectedIO;
+    if (m_cfg.autoFreopen) {
+        detectedIO = detectIOFromSource(localSrc);
+        if (!detectedIO.input.isEmpty() || !detectedIO.output.isEmpty()) {
+            emit logMessage(QString("[%1] Phát hiện freopen trong %2: inp='%3', out='%4'")
+                                .arg(m_cfg.contestantName, taskName, detectedIO.input, detectedIO.output));
+        }
+    }
+
     QDir taskDir(m_cfg.tasksDir + "/" + taskName);
     QStringList testFolders = taskDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
 
@@ -254,6 +487,9 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
             taskName.toUpper() + ".INP",
             taskName.toLower() + ".inp"
         };
+        if (!detectedIO.input.isEmpty()) {
+            inpVariations.prepend(detectedIO.input);
+        }
         inpVariations.removeDuplicates();
         for (const QString &v : inpVariations) {
             if (v.isEmpty()) continue;
@@ -273,6 +509,9 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         QFile::remove(workPath + "/" + taskName + ".OUT");
         QFile::remove(workPath + "/" + taskName.toLower() + ".out");
         QFile::remove(workPath + "/" + taskName.toUpper() + ".OUT");
+        if (!detectedIO.output.isEmpty()) {
+            QFile::remove(workPath + "/" + detectedIO.output);
+        }
 
         // Determine test limits
         double timeLimit = cfg.timeLimit > 0 ? cfg.timeLimit : 1.0;
@@ -301,15 +540,19 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
 
         // If useStdOut is false, search workPath case-insensitively for the contestant output!
         if (!cfg.useStdOut) {
-            QDir wd(workPath);
             QString foundOut;
-            QString targetBase = !cfg.outputFile.isEmpty() ? QFileInfo(cfg.outputFile).completeBaseName() : taskName;
-            for (const QString &f : wd.entryList(QDir::Files)) {
-                if (f.compare(defaultOutName, Qt::CaseInsensitive) == 0 ||
-                    f.compare(targetBase + ".out", Qt::CaseInsensitive) == 0 ||
-                    f.compare(taskName + ".out", Qt::CaseInsensitive) == 0) {
-                    foundOut = wd.filePath(f);
-                    break;
+            if (!detectedIO.output.isEmpty() && QFile::exists(workPath + "/" + detectedIO.output)) {
+                foundOut = workPath + "/" + detectedIO.output;
+            } else {
+                QDir wd(workPath);
+                QString targetBase = !cfg.outputFile.isEmpty() ? QFileInfo(cfg.outputFile).completeBaseName() : taskName;
+                for (const QString &f : wd.entryList(QDir::Files)) {
+                    if (f.compare(defaultOutName, Qt::CaseInsensitive) == 0 ||
+                        f.compare(targetBase + ".out", Qt::CaseInsensitive) == 0 ||
+                        f.compare(taskName + ".out", Qt::CaseInsensitive) == 0) {
+                        foundOut = wd.filePath(f);
+                        break;
+                    }
                 }
             }
             if (!foundOut.isEmpty()) {
@@ -330,7 +573,7 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         if (tr.verdict == Verdict::Judging) {
             QString msg;
             double ratio = Judger::checkOutput(outFile, actualOut, checker,
-                                               "", testPath, workPath, msg);
+                                               checkerExe, testPath, workPath, msg);
             tr.checkerMsg = msg;
             tr.score      = ratio * testMark;
             if (ratio >= 1.0) {
@@ -415,6 +658,7 @@ void JudgeEngine::start()
         wcfg.taskNames      = m_cfg.taskNames;
         wcfg.compilers      = m_cfg.compilers;
         wcfg.workDir        = m_tempDir;
+        wcfg.autoFreopen    = m_cfg.autoFreopen;
 
         auto *w = new JudgeWorker(wcfg, this);
         connect(w,    &JudgeWorker::updateReady,

@@ -14,6 +14,8 @@ public:
     explicit EnvSettingsDialog(QWidget *parent = nullptr);
     ~EnvSettingsDialog() {}
 
+    void accept() override;
+
 private:
     // ── Original Themis fields ──
     QLineEdit *m_edtOnlineDir;
@@ -21,6 +23,7 @@ private:
     QLineEdit *m_edtExamRoomDir;
     QLineEdit *m_edtNumFormat;
     QCheckBox *m_chkShowToolbar;
+    QCheckBox *m_chkAutoFreopen;
 
     // ── Linux-specific ──
     QLineEdit *m_edtTerminal;      // e.g. gnome-terminal, konsole, xterm

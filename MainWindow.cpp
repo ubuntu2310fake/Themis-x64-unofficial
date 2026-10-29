@@ -497,6 +497,8 @@ void MainWindow::runJudge(const QStringList &contestants, const QStringList &tas
     cfg.taskNames       = tasks;
     cfg.contestantNames = contestants;
     cfg.compilers       = m_compilerEntries;
+    QSettings settings("ThemisLinux", "ThemisLinux");
+    cfg.autoFreopen     = settings.value("AutoFreopen", true).toBool();
 
     auto *engine = new JudgeEngine(cfg, this);
     auto *dlg    = new JudgeDialog(engine, this);
