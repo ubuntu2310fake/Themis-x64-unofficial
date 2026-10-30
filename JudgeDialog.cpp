@@ -210,8 +210,12 @@ void JudgeDialog::onUpdate(const JudgeUpdate &u)
     m_scores[u.contestantName][u.taskName] = u.taskScore;
 
     if (m_lblName) {
-        if (u.testIndex >= 0) {
-            m_lblName->setText(QString("%1-%2 (Test %3)").arg(u.contestantName, u.taskName).arg(u.testIndex + 1));
+        if (m_mode == "detailed") {
+            if (u.testIndex >= 0) {
+                m_lblName->setText(QString("%1-%2 (Test %3)").arg(u.contestantName, u.taskName).arg(u.testIndex + 1));
+            } else {
+                m_lblName->setText(QString("%1-%2").arg(u.contestantName, u.taskName));
+            }
         } else {
             m_lblName->setText(QString("%1-%2").arg(u.contestantName, u.taskName));
         }
@@ -261,8 +265,21 @@ void JudgeDialog::onUpdate(const JudgeUpdate &u)
 void JudgeDialog::onProgress(int done, int total)
 {
     if (m_progress) {
-        m_progress->setMaximum(total);
-        m_progress->setValue(done);
+        if (total > 0) {
+            m_progress->setRange(0, total);
+            m_progress->setValue(done);
+        } else {
+            m_progress->setRange(0, 100);
+            m_progress->setValue(0);
+        }
+        if (m_mode == "detailed") {
+            if (total > 0) {
+                int pct = (int)((double)done / total * 100.0);
+                m_progress->setFormat(QString("Test %1 / %2 (%3%)").arg(done).arg(total).arg(pct));
+            } else {
+                m_progress->setFormat("Chuẩn bị...");
+            }
+        }
     }
 }
 
@@ -274,6 +291,10 @@ void JudgeDialog::onLog(const QString &msg)
 void JudgeDialog::onFinished()
 {
     if (m_timer) m_timer->stop();
+
+    if (m_progress) {
+        m_progress->setValue(m_progress->maximum());
+    }
 
     if (m_lblStatus) {
         m_lblStatus->setText("✔ Chấm bài hoàn tất!");

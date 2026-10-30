@@ -36,6 +36,7 @@ public:
 signals:
     void updateReady(const JudgeUpdate &update);
     void statusChanged(const QString &contestant, const QString &task, const QString &status);
+    void taskProgress(int currentTest, int totalTests);
     void contestantDone(const QString &name, const QList<TaskResult> &results);
     void logMessage(const QString &msg);
 
@@ -82,9 +83,12 @@ private slots:
     void onWorkerDone(const QString &name, const QList<TaskResult> &results);
 
 private:
+    void startNextContestant();
+
     ContestConfig m_cfg;
     QList<JudgeWorker*> m_workers;
     QString m_tempDir;
+    int m_currentContestantIdx = 0;
     int m_doneCount = 0;
     int m_total     = 0;
     bool m_stopped  = false;

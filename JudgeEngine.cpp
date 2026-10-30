@@ -23,8 +23,10 @@ JudgeWorker::JudgeWorker(const Config &cfg, QObject *parent)
 void JudgeWorker::run()
 {
     QList<TaskResult> results;
-    for (const QString &task : m_cfg.taskNames)
+    for (const QString &task : m_cfg.taskNames) {
+        if (isInterruptionRequested()) break;
         results << judgeTask(task);
+    }
     emit contestantDone(m_cfg.contestantName, results);
 }
 
@@ -399,6 +401,7 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
     TaskResult res;
     res.taskName = taskName;
 
+    emit taskProgress(0, 100);
     emit logMessage(QString("[%1] Judging task %2...").arg(m_cfg.contestantName, taskName));
 
     // ── Load task config ──────────────────────────────────────────────────────
@@ -429,6 +432,7 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         u.testResult.verdict = Verdict::SK;
         u.testResult.checkerMsg = "Không tìm thấy file mã nguồn";
         emit updateReady(u);
+        emit taskProgress(100, 100);
         emit logMessage(QString("[%1/%2] Không nộp bài").arg(m_cfg.contestantName, taskName));
         return res;
     }
@@ -482,6 +486,7 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
             u.statusText = "Dịch bị lỗi";
             emit updateReady(u);
             emit statusChanged(m_cfg.contestantName, taskName, "Dịch bị lỗi");
+            emit taskProgress(100, 100);
             emit logMessage(QString("[%1/%2] CE: %3").arg(m_cfg.contestantName, taskName, res.ceLog.left(80)));
             return res;
         }
@@ -559,8 +564,11 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
     QCollator collator;
     collator.setNumericMode(true);
     std::sort(tests.begin(), tests.end(), collator);
+    int totalTests = tests.size();
+    emit taskProgress(0, totalTests > 0 ? totalTests : 1);
 
     for (int ti = 0; ti < tests.size(); ++ti) {
+        if (isInterruptionRequested()) break;
         const QString &testName = tests[ti];
         QString testPath = taskDir.filePath(testName);
         QDir td(testPath);
@@ -782,8 +790,10 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         u.testIndex = ti;
         u.testResult = tr;
         u.taskScore = totalScore;
-        u.statusText = "Chấm...";
+        u.statusText = (tr.verdict == Verdict::AC || tr.verdict == Verdict::WA) ? "Chấm..." : "Kết thúc bài làm";
         emit updateReady(u);
+
+        emit taskProgress(ti + 1, totalTests > 0 ? totalTests : 1);
 
         emit logMessage(QString("[%1/%2/%3] %4  %5s  %6KB  %7 pts")
             .arg(m_cfg.contestantName, taskName, testName,
@@ -792,6 +802,8 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
             .arg(tr.memKb)
             .arg(tr.score, 0, 'f', 2));
     }
+
+    emit taskProgress(totalTests, totalTests > 0 ? totalTests : 1);
 
     res.totalScore = totalScore;
     res.verdict    = tests.isEmpty() ? Verdict::IE
@@ -826,41 +838,63 @@ void JudgeEngine::start()
 {
     m_doneCount = 0;
     m_stopped   = false;
+    m_currentContestantIdx = 0;
+    m_workers.clear();
 
-    for (const QString &name : m_cfg.contestantNames) {
-        JudgeWorker::Config wcfg;
-        wcfg.contestantDir  = m_cfg.contestantsDir;
-        wcfg.contestantName = name;
-        wcfg.tasksDir       = m_cfg.tasksDir;
-        wcfg.taskNames      = m_cfg.taskNames;
-        wcfg.compilers      = m_cfg.compilers;
-        wcfg.workDir        = m_tempDir;
-        wcfg.autoFreopen    = m_cfg.autoFreopen;
-
-        auto *w = new JudgeWorker(wcfg, this);
-        connect(w,    &JudgeWorker::updateReady,
-                this, &JudgeEngine::updateReady);
-        connect(w,    &JudgeWorker::statusChanged,
-                this, &JudgeEngine::statusChanged);
-        connect(w,    &JudgeWorker::logMessage,
-                this, &JudgeEngine::logMessage);
-        connect(w,    &JudgeWorker::contestantDone,
-                this, &JudgeEngine::onWorkerDone);
-
-        m_workers << w;
-        w->start();
+    if (m_cfg.contestantNames.isEmpty()) {
+        emit finished();
+        return;
     }
 
-    if (m_cfg.contestantNames.isEmpty())
+    startNextContestant();
+}
+
+void JudgeEngine::startNextContestant()
+{
+    if (m_stopped || m_currentContestantIdx >= m_cfg.contestantNames.size()) {
         emit finished();
+        return;
+    }
+
+    const QString &name = m_cfg.contestantNames[m_currentContestantIdx];
+
+    JudgeWorker::Config wcfg;
+    wcfg.contestantDir  = m_cfg.contestantsDir;
+    wcfg.contestantName = name;
+    wcfg.tasksDir       = m_cfg.tasksDir;
+    wcfg.taskNames      = m_cfg.taskNames;
+    wcfg.compilers      = m_cfg.compilers;
+    wcfg.workDir        = m_tempDir;
+    wcfg.autoFreopen    = m_cfg.autoFreopen;
+
+    auto *w = new JudgeWorker(wcfg, this);
+    connect(w,    &JudgeWorker::updateReady,
+            this, &JudgeEngine::updateReady);
+    connect(w,    &JudgeWorker::statusChanged,
+            this, &JudgeEngine::statusChanged);
+    connect(w,    &JudgeWorker::taskProgress,
+            this, &JudgeEngine::progressChanged);
+    connect(w,    &JudgeWorker::logMessage,
+            this, &JudgeEngine::logMessage);
+    connect(w,    &JudgeWorker::contestantDone,
+            this, &JudgeEngine::onWorkerDone);
+
+    m_workers << w;
+    w->start();
 }
 
 void JudgeEngine::stop()
 {
     m_stopped = true;
     for (auto *w : m_workers) {
-        w->quit();
-        w->wait(3000);
+        if (w->isRunning()) {
+            w->requestInterruption();
+            w->wait(1000);
+            if (w->isRunning()) {
+                w->terminate();
+                w->wait(500);
+            }
+        }
         w->deleteLater();
     }
     m_workers.clear();
@@ -957,7 +991,10 @@ void JudgeEngine::onWorkerDone(const QString &name, const QList<TaskResult> &res
     }
 
     ++m_doneCount;
-    emit progressChanged(m_doneCount, m_total);
-    if (m_doneCount >= m_total)
+    m_currentContestantIdx++;
+    if (!m_stopped && m_currentContestantIdx < m_cfg.contestantNames.size()) {
+        startNextContestant();
+    } else {
         emit finished();
+    }
 }
