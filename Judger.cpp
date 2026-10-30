@@ -94,13 +94,23 @@ TestResult Judger::execute(const QString &exeFile,
     if (useStdIn) {
         fdIn = open(inputFile.toLocal8Bit().constData(), O_RDONLY);
     } else {
-        fdIn = open("/dev/null", O_RDONLY); // Provide dummy stdin
+        // Fallback: If inputFile exists, feed it to stdin anyway.
+        // If contestant code uses freopen, freopen will override stdin.
+        // If contestant code reads from cin/scanf without freopen (tested in Code::Blocks), it gets input.
+        if (QFile::exists(inputFile)) {
+            fdIn = open(inputFile.toLocal8Bit().constData(), O_RDONLY);
+        } else {
+            fdIn = open("/dev/null", O_RDONLY);
+        }
     }
 
+    QString fallbackOutFile = workDir + "/__stdout.tmp";
     if (useStdOut) {
         fdOut = open(actualOutputFile.toLocal8Bit().constData(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     } else {
-        fdOut = open("/dev/null", O_WRONLY); // Discard stdout if not used
+        // Fallback: Instead of discarding to /dev/null, capture stdout into __stdout.tmp.
+        // If contestant used cout/printf without freopen (tested in Code::Blocks), output is preserved.
+        fdOut = open(fallbackOutFile.toLocal8Bit().constData(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     }
 
     if (fdIn < 0 || fdOut < 0) {
@@ -280,8 +290,24 @@ static QStringList tokenize(const QString &text, bool lines)
 static QString readFile(const QString &path)
 {
     QFile f(path);
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
-    return QString::fromLocal8Bit(f.readAll());
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    QByteArray data = f.readAll();
+    // Strip UTF-8 BOM if present
+    if (data.startsWith("\xEF\xBB\xBF")) {
+        data.remove(0, 3);
+    }
+    // Normalize CRLF and standalone CR to LF
+    data.replace("\r\n", "\n");
+    data.replace('\r', '\n');
+
+    // Decode UTF-8 or fallback to Latin-1
+    QString s = QString::fromUtf8(data);
+    if (s.contains(QChar(0xFFFD))) {
+        s = QString::fromLatin1(data);
+    }
+    // Remove any embedded zero-width BOM chars (U+FEFF)
+    s.remove(QChar(0xFEFF));
+    return s;
 }
 
 double Judger::checkLinesWords(const QString &expPath, const QString &actPath,
@@ -291,16 +317,26 @@ double Judger::checkLinesWords(const QString &expPath, const QString &actPath,
         msg = "Không tìm thấy file kết quả!";
         return 0.0;
     }
-    QString exp = readFile(expPath).trimmed();
-    QString act = readFile(actPath).trimmed();
+    QString exp = readFile(expPath);
+    QString act = readFile(actPath);
 
     if (act.isEmpty() && !exp.isEmpty()) {
         msg = "File kết quả rỗng!";
         return 0.0;
     }
 
-    QStringList expLines = exp.split('\n', Qt::SkipEmptyParts);
-    QStringList actLines = act.split('\n', Qt::SkipEmptyParts);
+    // Split lines by '\n' (CRLF already normalized to '\n')
+    QStringList expLines = exp.split('\n');
+    QStringList actLines = act.split('\n');
+
+    // Themis C1 specification:
+    // Trailing empty lines at the end of the file do not affect the result.
+    // However, leading empty lines and middle empty lines DO affect the result!
+    static const QRegularExpression wsOnly("^[ \\t]*$");
+    while (!expLines.isEmpty() && wsOnly.match(expLines.last()).hasMatch())
+        expLines.removeLast();
+    while (!actLines.isEmpty() && wsOnly.match(actLines.last()).hasMatch())
+        actLines.removeLast();
 
     if (expLines.size() != actLines.size()) {
         msg = QString("Số dòng khác nhau (Đáp án: %1 dòng, Thí sinh: %2 dòng)")
@@ -308,9 +344,10 @@ double Judger::checkLinesWords(const QString &expPath, const QString &actPath,
         return 0.0;
     }
 
+    static const QRegularExpression wordSep("[ \\t]+");
     for (int i = 0; i < expLines.size(); ++i) {
-        QStringList ew = expLines[i].split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-        QStringList aw = actLines[i].split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        QStringList ew = expLines[i].split(wordSep, Qt::SkipEmptyParts);
+        QStringList aw = actLines[i].split(wordSep, Qt::SkipEmptyParts);
         if (ew.size() != aw.size()) {
             msg = QString("Dòng %1: Số lượng từ khác nhau (Đáp án: %2 từ, Thí sinh: %3 từ)")
                   .arg(i + 1).arg(ew.size()).arg(aw.size());
@@ -340,8 +377,14 @@ double Judger::checkWords(const QString &expPath, const QString &actPath,
     QString exp = readFile(expPath);
     QString act = readFile(actPath);
 
-    QStringList ew = exp.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-    QStringList aw = act.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    static const QRegularExpression wordSep("[ \\t\\r\\n]+");
+    QStringList ew = exp.split(wordSep, Qt::SkipEmptyParts);
+    QStringList aw = act.split(wordSep, Qt::SkipEmptyParts);
+
+    if (aw.isEmpty() && !ew.isEmpty()) {
+        msg = "File kết quả rỗng!";
+        return 0.0;
+    }
 
     if (ew.size() != aw.size()) {
         msg = QString("Số lượng từ khác nhau (Đáp án: %1, Thí sinh: %2)")

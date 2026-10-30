@@ -39,17 +39,22 @@ TestResult Judger::execute(const QString &exeFile,
     
     if (useStdIn) {
         hIn = CreateFileW((const wchar_t*)inputFile.utf16(), GENERIC_READ, FILE_SHARE_READ, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    } else if (QFile::exists(inputFile)) {
+        hIn = CreateFileW((const wchar_t*)inputFile.utf16(), GENERIC_READ, FILE_SHARE_READ, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     }
+    QString fallbackOutFile = workDir + "/__stdout.tmp";
     if (useStdOut) {
         hOut = CreateFileW((const wchar_t*)actualOutputFile.utf16(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    } else {
+        hOut = CreateFileW((const wchar_t*)fallbackOutFile.utf16(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     }
 
     STARTUPINFOW si;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     si.dwFlags |= STARTF_USESTDHANDLES;
-    si.hStdInput = useStdIn ? hIn : INVALID_HANDLE_VALUE;
-    si.hStdOutput = useStdOut ? hOut : INVALID_HANDLE_VALUE;
+    si.hStdInput = (hIn != INVALID_HANDLE_VALUE) ? hIn : INVALID_HANDLE_VALUE;
+    si.hStdOutput = (hOut != INVALID_HANDLE_VALUE) ? hOut : INVALID_HANDLE_VALUE;
     si.hStdError = INVALID_HANDLE_VALUE; // or a nul handle
 
     PROCESS_INFORMATION pi;
