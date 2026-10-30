@@ -13,6 +13,7 @@ struct JudgeUpdate {
     int      testIndex;     // -1 = task-level update (CE, SK)
     TestResult testResult;
     double   taskScore;     // running total for this task
+    QString  statusText;    // Live phase status: "Dịch bài...", "Nạp bài làm", "Chạy bài làm", "Chấm...", etc.
 };
 
 // ─── Worker thread for one contestant ─────────────────────────────────────────
@@ -34,6 +35,7 @@ public:
 
 signals:
     void updateReady(const JudgeUpdate &update);
+    void statusChanged(const QString &contestant, const QString &task, const QString &status);
     void contestantDone(const QString &name, const QList<TaskResult> &results);
     void logMessage(const QString &msg);
 
@@ -71,6 +73,7 @@ public:
 
 signals:
     void updateReady(const JudgeUpdate &update);
+    void statusChanged(const QString &contestant, const QString &task, const QString &status);
     void logMessage(const QString &msg);
     void progressChanged(int done, int total);
     void finished();

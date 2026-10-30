@@ -93,6 +93,12 @@ EnvSettingsDialog::EnvSettingsDialog(QWidget *parent) : QDialog(parent)
     m_chkShowToolbar->setChecked(true);
     formGen->addRow("", m_chkShowToolbar);
 
+    // Dialog Display Mode
+    m_cmbJudgeDialogMode = new QComboBox(tabGeneral);
+    m_cmbJudgeDialogMode->addItem("Giao diện Themis cổ điển (Đơn giản - Thanh tiến trình & Trạng thái)", "classic");
+    m_cmbJudgeDialogMode->addItem("Giao diện ThemisLinux (Chi tiết - Nhật ký từng test kèm thời gian, bộ nhớ)", "detailed");
+    formGen->addRow("Giao diện hộp thoại chấm bài:", m_cmbJudgeDialogMode);
+
     // Linux Compatibility Group
     QGroupBox *grpCompat = new QGroupBox("Tương thích tệp tin trên Linux (File Compatibility)", tabGeneral);
     QVBoxLayout *layCompat = new QVBoxLayout(grpCompat);
@@ -176,6 +182,11 @@ EnvSettingsDialog::EnvSettingsDialog(QWidget *parent) : QDialog(parent)
     if (settings.contains("ExamRoomDir")) m_edtExamRoomDir->setText(settings.value("ExamRoomDir").toString());
     if (settings.contains("NumFormat")) m_edtNumFormat->setText(settings.value("NumFormat").toString());
     if (settings.contains("ShowToolbar")) m_chkShowToolbar->setChecked(settings.value("ShowToolbar").toBool());
+    if (settings.contains("JudgeDialogMode")) {
+        QString mode = settings.value("JudgeDialogMode", "classic").toString();
+        int idx = m_cmbJudgeDialogMode->findData(mode);
+        if (idx >= 0) m_cmbJudgeDialogMode->setCurrentIndex(idx);
+    }
     if (settings.contains("AutoFreopen")) m_chkAutoFreopen->setChecked(settings.value("AutoFreopen").toBool());
     if (settings.contains("Terminal")) m_edtTerminal->setText(settings.value("Terminal").toString());
     if (settings.contains("FileManager")) m_edtFileManager->setText(settings.value("FileManager").toString());
@@ -199,6 +210,7 @@ void EnvSettingsDialog::accept()
     settings.setValue("ExamRoomDir", m_edtExamRoomDir->text());
     settings.setValue("NumFormat", m_edtNumFormat->text());
     settings.setValue("ShowToolbar", m_chkShowToolbar->isChecked());
+    settings.setValue("JudgeDialogMode", m_cmbJudgeDialogMode->currentData().toString());
     settings.setValue("AutoFreopen", m_chkAutoFreopen->isChecked());
     settings.setValue("Terminal", m_edtTerminal->text());
     settings.setValue("FileManager", m_edtFileManager->text());

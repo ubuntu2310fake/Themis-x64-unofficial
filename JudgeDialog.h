@@ -5,12 +5,14 @@
 #include <QProgressBar>
 #include <QLabel>
 #include <QMap>
+#include <QTimer>
+#include <QElapsedTimer>
 
 class JudgeDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit JudgeDialog(JudgeEngine *engine, QWidget *parent = nullptr);
+    explicit JudgeDialog(JudgeEngine *engine, const QString &mode = "classic", QWidget *parent = nullptr);
     ~JudgeDialog();
 
 signals:
@@ -19,17 +21,30 @@ signals:
 
 private slots:
     void onUpdate(const JudgeUpdate &u);
+    void onStatusChanged(const QString &contestant, const QString &task, const QString &status);
     void onProgress(int done, int total);
     void onLog(const QString &msg);
     void onFinished();
+    void updateTimerDisplay();
 
 private:
     void buildUI();
+    void buildClassicUI();
+    void buildDetailedUI();
 
     JudgeEngine   *m_engine;
-    QProgressBar  *m_progress;
-    QLabel        *m_lblStatus;
-    QTextEdit     *m_log;
+    QString        m_mode; // "classic" or "detailed"
+
+    // Widgets
+    QProgressBar  *m_progress = nullptr;
+    QLabel        *m_lblName = nullptr;
+    QLabel        *m_lblStatus = nullptr;
+    QLabel        *m_lblTime = nullptr;
+    QTextEdit     *m_log = nullptr;
+
+    // Timer
+    QTimer        *m_timer = nullptr;
+    QElapsedTimer  m_elapsed;
 
     // [contestant][task] = total score
     QMap<QString, QMap<QString, double>> m_scores;

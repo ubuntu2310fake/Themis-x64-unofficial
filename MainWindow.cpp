@@ -499,9 +499,10 @@ void MainWindow::runJudge(const QStringList &contestants, const QStringList &tas
     cfg.compilers       = m_compilerEntries;
     QSettings settings("ThemisLinux", "ThemisLinux");
     cfg.autoFreopen     = settings.value("AutoFreopen", true).toBool();
+    QString dialogMode  = settings.value("JudgeDialogMode", "classic").toString();
 
     auto *engine = new JudgeEngine(cfg, this);
-    auto *dlg    = new JudgeDialog(engine, this);
+    auto *dlg    = new JudgeDialog(engine, dialogMode, this);
 
     connect(engine, &JudgeEngine::updateReady, this, &MainWindow::onJudgeUpdate);
 

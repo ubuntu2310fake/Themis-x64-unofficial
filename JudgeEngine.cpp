@@ -321,6 +321,8 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
     QFile::copy(sourceFile, localSrc);
 
     // ── Compile ───────────────────────────────────────────────────────────────
+    emit statusChanged(m_cfg.contestantName, taskName, "Dịch bài...");
+
     const CompilerEntry *compiler = findCompiler(foundExt);
     QString exeFile;
     bool isInterpreted = false;
@@ -353,7 +355,9 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
             u.taskName = taskName; u.testIndex = -1; u.taskScore = 0;
             u.testResult.verdict = Verdict::CE;
             u.testResult.checkerMsg = res.ceLog.split('\n').first(); // just first line for log
+            u.statusText = "Dịch bị lỗi";
             emit updateReady(u);
+            emit statusChanged(m_cfg.contestantName, taskName, "Dịch bị lỗi");
             emit logMessage(QString("[%1/%2] CE: %3").arg(m_cfg.contestantName, taskName, res.ceLog.left(80)));
             return res;
         }
@@ -527,8 +531,12 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         }
 
         // Run
+        emit statusChanged(m_cfg.contestantName, taskName, "Nạp bài làm");
+
         TestResult tr;
         tr.testName = testName;
+
+        emit statusChanged(m_cfg.contestantName, taskName, "Chạy bài làm");
 
         if (isInterpreted && foundExt == ".py") {
             QString interpreter = compiler ? compiler->command : "/usr/bin/python3";
@@ -571,6 +579,7 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
 
         // Check output if ran successfully
         if (tr.verdict == Verdict::Judging) {
+            emit statusChanged(m_cfg.contestantName, taskName, "Chấm...");
             QString msg;
             double ratio = Judger::checkOutput(outFile, actualOut, checker,
                                                checkerExe, testPath, workPath, msg);
@@ -582,15 +591,19 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
                 tr.verdict = Verdict::WA;
             }
         } else if (tr.verdict == Verdict::TLE) {
+            emit statusChanged(m_cfg.contestantName, taskName, "Kết thúc bài làm");
             tr.score = 0.0;
             if (tr.checkerMsg.isEmpty()) tr.checkerMsg = "Chạy quá thời gian";
         } else if (tr.verdict == Verdict::MLE) {
+            emit statusChanged(m_cfg.contestantName, taskName, "Kết thúc bài làm");
             tr.score = 0.0;
             if (tr.checkerMsg.isEmpty()) tr.checkerMsg = "Chạy quá bộ nhớ";
         } else if (tr.verdict == Verdict::RTE) {
+            emit statusChanged(m_cfg.contestantName, taskName, "Kết thúc bài làm");
             tr.score = 0.0;
             if (tr.checkerMsg.isEmpty()) tr.checkerMsg = "Chạy sinh lỗi";
         } else {
+            emit statusChanged(m_cfg.contestantName, taskName, "Kết thúc bài làm");
             tr.score = 0.0;
             if (tr.checkerMsg.isEmpty()) tr.checkerMsg = "Lỗi nghiêm trọng";
         }
@@ -606,6 +619,7 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         u.testIndex = ti;
         u.testResult = tr;
         u.taskScore = totalScore;
+        u.statusText = "Chấm...";
         emit updateReady(u);
 
         emit logMessage(QString("[%1/%2/%3] %4  %5s  %6KB  %7 pts")
@@ -663,6 +677,8 @@ void JudgeEngine::start()
         auto *w = new JudgeWorker(wcfg, this);
         connect(w,    &JudgeWorker::updateReady,
                 this, &JudgeEngine::updateReady);
+        connect(w,    &JudgeWorker::statusChanged,
+                this, &JudgeEngine::statusChanged);
         connect(w,    &JudgeWorker::logMessage,
                 this, &JudgeEngine::logMessage);
         connect(w,    &JudgeWorker::contestantDone,

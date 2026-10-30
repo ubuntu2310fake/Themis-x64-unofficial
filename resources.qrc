@@ -12,5 +12,6 @@
         <file>btnsettings.png</file>
         <file>btncompilerconfig.png</file>
         <file>btnsecurity.png</file>
+        <file>btnstopjudge.png</file>
     </qresource>
 </RCC>

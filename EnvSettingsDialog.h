@@ -24,6 +24,7 @@ private:
     QLineEdit *m_edtNumFormat;
     QCheckBox *m_chkShowToolbar;
     QCheckBox *m_chkAutoFreopen;
+    QComboBox *m_cmbJudgeDialogMode; // Themis classic vs Detailed view
 
     // ── Linux-specific ──
     QLineEdit *m_edtTerminal;      // e.g. gnome-terminal, konsole, xterm
