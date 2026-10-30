@@ -39,14 +39,14 @@ TestResult Judger::execute(const QString &exeFile,
     
     if (useStdIn) {
         hIn = CreateFileW((const wchar_t*)inputFile.utf16(), GENERIC_READ, FILE_SHARE_READ, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    } else if (QFile::exists(inputFile)) {
-        hIn = CreateFileW((const wchar_t*)inputFile.utf16(), GENERIC_READ, FILE_SHARE_READ, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    } else {
+        hIn = INVALID_HANDLE_VALUE;
     }
-    QString fallbackOutFile = workDir + "/__stdout.tmp";
+
     if (useStdOut) {
         hOut = CreateFileW((const wchar_t*)actualOutputFile.utf16(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     } else {
-        hOut = CreateFileW((const wchar_t*)fallbackOutFile.utf16(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        hOut = INVALID_HANDLE_VALUE;
     }
 
     STARTUPINFOW si;

@@ -71,8 +71,20 @@ static QString stripCodeComments(const QString &source, bool isPython)
     int n = source.size();
     int i = 0;
     while (i < n) {
+        // Python docstrings / triple quote comments
+        if (isPython && (source.mid(i, 3) == "\"\"\"" || source.mid(i, 3) == "'''")) {
+            QString triple = source.mid(i, 3);
+            i += 3;
+            while (i + 2 < n && source.mid(i, 3) != triple) {
+                if (source[i] == '\n') result.append('\n');
+                i++;
+            }
+            if (i + 2 < n) i += 3;
+            else i = n;
+            result.append(' ');
+        }
         // String literal "..."
-        if (source[i] == '"') {
+        else if (source[i] == '"') {
             result.append(source[i++]);
             while (i < n && source[i] != '"') {
                 if (source[i] == '\\' && i + 1 < n) {
@@ -96,57 +108,51 @@ static QString stripCodeComments(const QString &source, bool isPython)
         // Python comment #
         else if (isPython && source[i] == '#') {
             while (i < n && source[i] != '\n') {
-                result.append(' ');
                 i++;
             }
+            result.append(' ');
         }
         // C/C++ line comment //
         else if (i + 1 < n && source[i] == '/' && source[i+1] == '/') {
             while (i < n && source[i] != '\n') {
-                result.append(' ');
                 i++;
             }
+            result.append(' ');
         }
         // C/C++ block comment /* ... */
         else if (i + 1 < n && source[i] == '/' && source[i+1] == '*') {
-            result.append(' ');
-            result.append(' ');
             i += 2;
             while (i + 1 < n && !(source[i] == '*' && source[i+1] == '/')) {
-                result.append(source[i] == '\n' ? '\n' : ' ');
+                if (source[i] == '\n') result.append('\n');
                 i++;
             }
             if (i + 1 < n) {
-                result.append(' ');
-                result.append(' ');
                 i += 2;
+            } else {
+                i = n;
             }
+            result.append(' ');
         }
         // Pascal block comment { ... }
         else if (source[i] == '{') {
+            i++;
             while (i < n && source[i] != '}') {
-                result.append(source[i] == '\n' ? '\n' : ' ');
+                if (source[i] == '\n') result.append('\n');
                 i++;
             }
-            if (i < n) {
-                result.append(' ');
-                i++;
-            }
+            if (i < n) i++;
+            result.append(' ');
         }
         // Pascal block comment (* ... *)
         else if (i + 1 < n && source[i] == '(' && source[i+1] == '*') {
-            result.append(' ');
-            result.append(' ');
             i += 2;
             while (i + 1 < n && !(source[i] == '*' && source[i+1] == ')')) {
-                result.append(source[i] == '\n' ? '\n' : ' ');
+                if (source[i] == '\n') result.append('\n');
                 i++;
             }
-            if (i + 1 < n) {
-                result.append(' ');
-                result.append(' ');
-                i += 2;
-            }
+            if (i + 1 < n) i += 2;
+            else i = n;
+            result.append(' ');
         }
         else {
             result.append(source[i++]);
@@ -626,7 +632,6 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         QString defaultOutName = !cfg.outputFile.isEmpty() ? cfg.outputFile : (taskName + ".OUT");
         QString actualOut = cfg.useStdOut ? (workPath + "/" + testName + ".out") : (workPath + "/" + defaultOutName);
         QFile::remove(actualOut);
-        QFile::remove(workPath + "/__stdout.tmp");
         // Also remove any existing case variations of output in workPath
         QFile::remove(workPath + "/" + taskName + ".out");
         QFile::remove(workPath + "/" + taskName + ".OUT");
@@ -665,7 +670,7 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
         }
         tr.testName = testName;
 
-        // Search workPath for contestant output, with stdout fallback
+        // Search workPath for contestant output file
         QString foundOut;
         QDir wd(workPath);
         QString targetBase = !cfg.outputFile.isEmpty() ? QFileInfo(cfg.outputFile).completeBaseName() : taskName;
@@ -678,7 +683,6 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
             } else {
                 // 2. Search case-insensitively for defaultOutName, targetBase.out, taskName.out
                 for (const QString &f : wd.entryList(QDir::Files)) {
-                    if (f == "__stdout.tmp") continue;
                     if (f.compare(defaultOutName, Qt::CaseInsensitive) == 0 ||
                         f.compare(targetBase + ".out", Qt::CaseInsensitive) == 0 ||
                         f.compare(taskName + ".out", Qt::CaseInsensitive) == 0) {
@@ -694,7 +698,7 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
                 // 3. Search for any other .out or .ans file created in workPath
                 if (foundOut.isEmpty() || QFileInfo(foundOut).size() == 0) {
                     for (const QString &f : wd.entryList(QDir::Files)) {
-                        if (f == "__stdout.tmp" || f == taskName ||
+                        if (f == taskName ||
                             f.endsWith(".cpp", Qt::CaseInsensitive) || f.endsWith(".c", Qt::CaseInsensitive) ||
                             f.endsWith(".pas", Qt::CaseInsensitive) || f.endsWith(".py", Qt::CaseInsensitive) ||
                             f.endsWith(".inp", Qt::CaseInsensitive) || f.endsWith(".in", Qt::CaseInsensitive) ||
@@ -706,16 +710,6 @@ TaskResult JudgeWorker::judgeTask(const QString &taskName)
                         }
                     }
                 }
-            }
-
-            // 4. Fallback to captured stdout if no file on disk or disk file is empty
-            // (common when contestants test in Code::Blocks using cout/printf without freopen)
-            QString fallbackStdout = workPath + "/__stdout.tmp";
-            if ((foundOut.isEmpty() || QFileInfo(foundOut).size() == 0) &&
-                QFile::exists(fallbackStdout) && QFileInfo(fallbackStdout).size() > 0) {
-                foundOut = actualOut;
-                QFile::remove(actualOut);
-                QFile::copy(fallbackStdout, actualOut);
             }
 
             if (!foundOut.isEmpty()) {

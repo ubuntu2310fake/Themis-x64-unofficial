@@ -94,23 +94,13 @@ TestResult Judger::execute(const QString &exeFile,
     if (useStdIn) {
         fdIn = open(inputFile.toLocal8Bit().constData(), O_RDONLY);
     } else {
-        // Fallback: If inputFile exists, feed it to stdin anyway.
-        // If contestant code uses freopen, freopen will override stdin.
-        // If contestant code reads from cin/scanf without freopen (tested in Code::Blocks), it gets input.
-        if (QFile::exists(inputFile)) {
-            fdIn = open(inputFile.toLocal8Bit().constData(), O_RDONLY);
-        } else {
-            fdIn = open("/dev/null", O_RDONLY);
-        }
+        fdIn = open("/dev/null", O_RDONLY);
     }
 
-    QString fallbackOutFile = workDir + "/__stdout.tmp";
     if (useStdOut) {
         fdOut = open(actualOutputFile.toLocal8Bit().constData(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     } else {
-        // Fallback: Instead of discarding to /dev/null, capture stdout into __stdout.tmp.
-        // If contestant used cout/printf without freopen (tested in Code::Blocks), output is preserved.
-        fdOut = open(fallbackOutFile.toLocal8Bit().constData(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        fdOut = open("/dev/null", O_WRONLY);
     }
 
     if (fdIn < 0 || fdOut < 0) {
