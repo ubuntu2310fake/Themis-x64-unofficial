@@ -60,19 +60,65 @@ bool Judger::compile(const QString &sourceFile,
     QStringList parts = QProcess::splitCommand(cmd);
     if (parts.isEmpty()) { ceLog = "Empty compile command"; return false; }
 
+    QString prog = parts[0];
+#ifdef Q_OS_WIN
+    prog = QDir::toNativeSeparators(prog);
+#endif
+
     QProcess proc;
     if (!workDir.isEmpty()) proc.setWorkingDirectory(workDir);
     proc.setProcessChannelMode(QProcess::MergedChannels);
-    proc.start(parts[0], parts.mid(1));
 
-    if (!proc.waitForFinished(30000)) {  // 30s compile timeout
-        proc.kill();
-        ceLog = "Compiler timed out";
+    // Ensure compiler directory is in PATH environment so Windows DLLs (libgmp, libisl, etc.) and toolchains are found
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    QString progDir = QFileInfo(prog).absolutePath();
+    if (!progDir.isEmpty()) {
+        QString curPath = env.value("PATH");
+#ifdef Q_OS_WIN
+        env.insert("PATH", QDir::toNativeSeparators(progDir) + ";" + curPath);
+#else
+        env.insert("PATH", progDir + ":" + curPath);
+#endif
+    }
+    proc.setProcessEnvironment(env);
+
+    proc.start(prog, parts.mid(1));
+
+    if (!proc.waitForStarted(5000)) {
+        ceLog = QString("Không thể khởi động trình biên dịch: %1\nLệnh: %2")
+                .arg(proc.errorString(), cmd);
         return false;
     }
 
-    ceLog = QString::fromLocal8Bit(proc.readAllStandardOutput());
-    return (proc.exitCode() == 0);
+    if (!proc.waitForFinished(30000)) {  // 30s compile timeout
+        proc.kill();
+        proc.waitForFinished(1000);
+        ceLog = "Quá thời gian biên dịch (30s)";
+        return false;
+    }
+
+    QByteArray outData = proc.readAllStandardOutput();
+    ceLog = QString::fromLocal8Bit(outData);
+    if (ceLog.isEmpty() && !outData.isEmpty()) {
+        ceLog = QString::fromUtf8(outData);
+    }
+
+    bool ok = (proc.exitCode() == 0);
+
+    // Verify output executable on disk and reconcile .exe extension
+    if (ok && !outputExe.isEmpty()) {
+        if (!QFile::exists(outputExe)) {
+            QString altExe = outputExe.endsWith(".exe", Qt::CaseInsensitive)
+                ? outputExe.left(outputExe.length() - 4)
+                : (outputExe + ".exe");
+            if (QFile::exists(altExe)) {
+                QFile::remove(outputExe);
+                QFile::copy(altExe, outputExe);
+            }
+        }
+    }
+
+    return ok;
 }
 
 // ─── Execute one test ─────────────────────────────────────────────────────────

@@ -61,6 +61,37 @@ MainWindow::MainWindow(QWidget *parent)
         m_compilerEntries = CompilerConfigDialog::defaultEntries();
     }
     settings.endArray();
+
+    // Auto-heal outdated/broken compiler paths (e.g. ucrt64 on Windows systems where Themis uses GCC)
+    bool needsSave = false;
+    QString appDir = QCoreApplication::applicationDirPath();
+    for (CompilerEntry &e : m_compilerEntries) {
+        if (e.command.contains("ucrt64", Qt::CaseInsensitive)) {
+            if (!QFile::exists(appDir + "/ucrt64/bin/g++.exe")) {
+                if (QFile::exists(appDir + "/GCC/bin/g++.exe")) {
+                    e.command.replace("ucrt64", "GCC", Qt::CaseInsensitive);
+                    needsSave = true;
+                } else {
+                    for (const auto &def : CompilerConfigDialog::defaultEntries()) {
+                        if (def.ext.compare(e.ext, Qt::CaseInsensitive) == 0) {
+                            e.command = def.command;
+                            needsSave = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (needsSave) {
+        settings.beginWriteArray("Compilers");
+        for (int i = 0; i < m_compilerEntries.size(); ++i) {
+            settings.setArrayIndex(i);
+            settings.setValue("ext", m_compilerEntries[i].ext);
+            settings.setValue("command", m_compilerEntries[i].command);
+        }
+        settings.endArray();
+    }
 }
 
 MainWindow::~MainWindow() {}

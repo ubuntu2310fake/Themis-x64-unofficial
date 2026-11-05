@@ -13,44 +13,56 @@
 #include <QShortcut>
 #include <QProcess>
 #include <QMessageBox>
+#include <QStandardPaths>
 
-// ─── Default compiler entries for Linux ──────────────────────────────────────
+// ─── Default compiler entries ────────────────────────────────────────────────
 QList<CompilerEntry> CompilerConfigDialog::defaultEntries()
 {
-    // Auto-detect common compiler paths
-    auto which = [](const QString &bin) -> QString {
-        QProcess p;
-        p.start("which", {bin});
-        p.waitForFinished(2000);
-        QString out = p.readAllStandardOutput().trimmed();
-        return out.isEmpty() ? bin : out;
+    QString appDir = QCoreApplication::applicationDirPath();
+
+#ifdef Q_OS_WIN
+    auto findWinCompiler = [](const QString &baseDir, const QStringList &subPaths, const QString &exeName) -> QString {
+        // 1. Check relative to applicationDirPath (%APPDIR%/...)
+        for (const QString &sub : subPaths) {
+            if (QFile::exists(baseDir + "/" + sub)) {
+                return "\"%APPDIR%/" + sub + "\"";
+            }
+        }
+        // 2. Check standard system locations on Windows
+        QStringList sysDirs = {
+            "C:/Program Files (x86)/Themis",
+            "C:/Program Files/Themis",
+            "C:/Themis",
+            "C:/MinGW",
+            "C:/msys64/ucrt64",
+            "C:/msys64/mingw64",
+            "C:/TDM-GCC-64"
+        };
+        for (const QString &sys : sysDirs) {
+            for (const QString &sub : subPaths) {
+                QString full = sys + "/" + sub;
+                if (QFile::exists(full)) {
+                    return "\"" + QDir::toNativeSeparators(full) + "\"";
+                }
+            }
+        }
+        // 3. Check system PATH
+        QString inPath = QStandardPaths::findExecutable(exeName);
+        if (!inPath.isEmpty()) {
+            return "\"" + QDir::toNativeSeparators(inPath) + "\"";
+        }
+        return exeName;
     };
 
-    QString appDir = QCoreApplication::applicationDirPath();
-#ifdef Q_OS_WIN
-    QString gpp  = "\"%APPDIR%/ucrt64/bin/g++.exe\"";
-    QString gcc  = "\"%APPDIR%/ucrt64/bin/gcc.exe\"";
-    QString fpc  = "fpc";
+    QString gpp  = findWinCompiler(appDir, {"GCC/bin/g++.exe", "ucrt64/bin/g++.exe", "mingw64/bin/g++.exe", "bin/g++.exe"}, "g++");
+    QString gcc  = findWinCompiler(appDir, {"GCC/bin/gcc.exe", "ucrt64/bin/gcc.exe", "mingw64/bin/gcc.exe", "bin/gcc.exe"}, "gcc");
+    QString fpc  = findWinCompiler(appDir, {"FPC/bin/i386-win32/fpc.exe", "FPC/bin/x86_64-win64/fpc.exe", "FPC/bin/fpc.exe", "bin/fpc.exe"}, "fpc");
+    QString py3  = findWinCompiler(appDir, {"PYTHON/python.exe", "python.exe"}, "python");
     QString java = "javac";
-    QString py3  = "\"%APPDIR%/PYTHON/python.exe\"";
-#else
-    QString gpp  = "\"%APPDIR%/ucrt64/bin/g++.exe\"";
-    if (!QFile::exists(appDir + "/ucrt64/bin/g++.exe")) gpp = which("g++");
-    
-    QString gcc  = "\"%APPDIR%/ucrt64/bin/gcc.exe\"";
-    if (!QFile::exists(appDir + "/ucrt64/bin/gcc.exe")) gcc = which("gcc");
-    
-    QString fpc  = which("fpc");
-    QString java = which("javac");
-    
-    QString py3  = "\"%APPDIR%/PYTHON/python.exe\"";
-    if (!QFile::exists(appDir + "/PYTHON/python.exe")) py3 = which("python3");
-#endif
 
-#ifdef Q_OS_WIN
     return {
-        { ".cpp",   gpp  + " -O2 -x c++ \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\" -Wl,--stack,66060288" },
-        { ".c",     gcc  + " -O2 -x c \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\" -pipe -lm -Wl,--stack,66060288" },
+        { ".cpp",   gpp  + " -O2 -static -x c++ \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\" -Wl,--stack,66060288" },
+        { ".c",     gcc  + " -O2 -static -x c \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\" -pipe -lm -Wl,--stack,66060288" },
         { ".pas",   fpc  + " -O2 -XS -Sg \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\"" },
         { ".pp",    fpc  + " -O2 -XS -Sg \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\"" },
         { ".java",  java + " \"%PATH%%NAME%%EXT%\"|@WorkDir=\"%PATH%\"" },
@@ -60,6 +72,22 @@ QList<CompilerEntry> CompilerConfigDialog::defaultEntries()
         { ".py",    py3 },
     };
 #else
+    auto which = [](const QString &bin) -> QString {
+        QString found = QStandardPaths::findExecutable(bin);
+        if (!found.isEmpty()) return found;
+        QProcess p;
+        p.start("which", {bin});
+        p.waitForFinished(1000);
+        QString out = p.readAllStandardOutput().trimmed();
+        return out.isEmpty() ? bin : out;
+    };
+
+    QString gpp  = which("g++");
+    QString gcc  = which("gcc");
+    QString fpc  = which("fpc");
+    QString java = which("javac");
+    QString py3  = which("python3");
+
     return {
         { ".cpp",   gpp  + " -O2 -x c++ \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\"" },
         { ".c",     gcc  + " -O2 -x c \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\" -pipe -lm" },

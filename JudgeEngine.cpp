@@ -56,7 +56,7 @@ QString JudgeWorker::findSourceFile(const QString &taskName, QString &foundExt) 
 const CompilerEntry* JudgeWorker::findCompiler(const QString &ext) const
 {
     for (const CompilerEntry &e : m_cfg.compilers)
-        if (e.ext == ext) return &e;
+        if (e.ext.compare(ext, Qt::CaseInsensitive) == 0) return &e;
     return nullptr;
 }
 
