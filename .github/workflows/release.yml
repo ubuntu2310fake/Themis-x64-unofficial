@@ -90,19 +90,43 @@ jobs:
           curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -L -o python.zip "https://www.python.org/ftp/python/3.11.0/python-3.11.0-amd64.zip"
           
           7z x mingw.7z -oThemis-Windows/
+          if [ -d Themis-Windows/ucrt64 ]; then
+            mv Themis-Windows/ucrt64 Themis-Windows/GCC
+          elif [ -d Themis-Windows/mingw64 ]; then
+            mv Themis-Windows/mingw64 Themis-Windows/GCC
+          fi
+
           mkdir Themis-Windows/PYTHON
           unzip python.zip -d Themis-Windows/PYTHON/
           
           # Dùng windeployqt để tự động nhúng các DLL Qt cần thiết
           windeployqt --compiler-runtime Themis-Windows/ThemisLinux.exe
           
+          # Đóng gói bản Portable ZIP
           7z a Themis-Windows.zip Themis-Windows/
+
+          # Tạo bộ cài đặt Inno Setup vào Program Files (x64)
+          if ! command -v iscc &> /dev/null; then
+            if [ -f "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ]; then
+              export PATH="/c/Program Files (x86)/Inno Setup 6:$PATH"
+            else
+              choco install innosetup --no-progress
+              export PATH="/c/Program Files (x86)/Inno Setup 6:$PATH"
+            fi
+          fi
+          iscc installer.iss
           
-      - name: Upload Windows Artifact
+      - name: Upload Windows Portable
         uses: actions/upload-artifact@v4
         with:
           name: Themis-Windows.zip
           path: Themis-Windows.zip
+
+      - name: Upload Windows Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Themis-Setup-x64.exe
+          path: Themis-Setup-x64.exe
 
   release:
     needs: [build-linux, build-windows]
@@ -115,6 +139,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: Themis-Windows.zip
+      - uses: actions/download-artifact@v4
+        with:
+          name: Themis-Setup-x64.exe
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
@@ -123,5 +150,6 @@ jobs:
           files: |
             ThemisLinux*.AppImage
             Themis-Windows.zip
+            Themis-Setup-x64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

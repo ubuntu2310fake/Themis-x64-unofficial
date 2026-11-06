@@ -24,7 +24,8 @@ Dự án được xây dựng và phát triển lại dựa trên phần mềm T
 
 Các bản dựng tự động mới nhất có sẵn tại mục **[Releases](../../releases)**:
 - **Linux:** Tải file `ThemisLinux-1.0-x86_64.AppImage`, cấp quyền thực thi (`chmod +x`) và chạy.
-- **Windows:** Tải file `Themis-Windows.zip`, giải nén và chạy file `ThemisLinux.exe`.
+- **Windows x64 Installer (Khuyên dùng):** Tải file `Themis-Setup-x64.exe`, bộ cài đặt tự động cài vào `C:\Program Files\Themis` (x64 chuẩn), tạo shortcut màn hình, Start Menu và liên kết định dạng `.contest`.
+- **Windows x64 Portable:** Tải file `Themis-Windows.zip`, giải nén và chạy file `ThemisLinux.exe` trực tiếp không cần cài đặt.
 
 ---
 

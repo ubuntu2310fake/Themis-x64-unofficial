@@ -32,4 +32,6 @@ HEADERS += MainWindow.h \
 
 LIBS += -lz
 
+win32: RC_ICONS = themis.ico
+
 RESOURCES += resources.qrc
