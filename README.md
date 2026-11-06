@@ -15,7 +15,7 @@ Dự án được xây dựng và phát triển lại dựa trên phần mềm T
 - **Tích hợp trình biên dịch & thông dịch hiện đại:**
   - Hỗ trợ **GCC / G++ mới nhất** (MinGW-w64 MCF x64 UCRT).
   - Cho phép tùy biến và hỗ trợ chấm **Python 3.11+ x64** trực tiếp thông qua đường dẫn cấu hình linh hoạt.
-  - Hỗ trợ macro đường dẫn động `%APPDIR%` giúp Themis có tính di động tuyệt đối (copy thư mục đi bất kỳ ổ đĩa nào vẫn nhận đúng compiler và python đi kèm).
+  - Tự động nhận diện và chuyển đổi đường dẫn bộ dịch: Tương thích hoàn toàn với Themis gốc (sử dụng đường dẫn tuyệt đối chuẩn xác trong cấu hình), đồng thời có cơ chế tự quy ước và tự động chuyển đổi nếu thư mục cài đặt Themis được di chuyển hoặc thay đổi ổ đĩa.
 - **Giao diện hiện đại với Qt6:** Tối ưu hóa UI/UX, hỗ trợ hiển thị icon sắc nét, bảng cấu hình thân thiện.
 
 ---

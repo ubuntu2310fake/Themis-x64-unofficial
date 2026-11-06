@@ -22,10 +22,11 @@ QList<CompilerEntry> CompilerConfigDialog::defaultEntries()
 
 #ifdef Q_OS_WIN
     auto findWinCompiler = [](const QString &baseDir, const QStringList &subPaths, const QString &exeName) -> QString {
-        // 1. Check relative to applicationDirPath (%APPDIR%/...)
+        // 1. Check relative to applicationDirPath (returns native absolute path, NOT %APPDIR%)
         for (const QString &sub : subPaths) {
-            if (QFile::exists(baseDir + "/" + sub)) {
-                return "\"%APPDIR%/" + sub + "\"";
+            QString full = baseDir + "/" + sub;
+            if (QFile::exists(full)) {
+                return "\"" + QDir::toNativeSeparators(full) + "\"";
             }
         }
         // 2. Check standard system locations on Windows
@@ -58,7 +59,7 @@ QList<CompilerEntry> CompilerConfigDialog::defaultEntries()
     QString gcc  = findWinCompiler(appDir, {"GCC/bin/gcc.exe", "ucrt64/bin/gcc.exe", "mingw64/bin/gcc.exe", "bin/gcc.exe"}, "gcc");
     QString fpc  = findWinCompiler(appDir, {"FPC/bin/i386-win32/fpc.exe", "FPC/bin/x86_64-win64/fpc.exe", "FPC/bin/fpc.exe", "bin/fpc.exe"}, "fpc");
     QString py3  = findWinCompiler(appDir, {"PYTHON/python.exe", "python.exe"}, "python");
-    QString java = "javac";
+    QString java = findWinCompiler(appDir, {"JDK/bin/javac.exe", "bin/javac.exe"}, "javac");
 
     return {
         { ".cpp",   gpp  + " -O2 -static -x c++ \"%PATH%%NAME%%EXT%\" -o \"%PATH%%NAME%\" -Wl,--stack,66060288" },
@@ -100,6 +101,173 @@ QList<CompilerEntry> CompilerConfigDialog::defaultEntries()
         { ".py",    py3 },
     };
 #endif
+}
+
+// ─── Auto-relocate & self-heal compiler commands ─────────────────────────────
+QString CompilerConfigDialog::autoRelocateCommand(const QString &rawCmd, const QString &ext)
+{
+    QString cmd = rawCmd.trimmed();
+    if (cmd.startsWith(';')) {
+        return rawCmd; // Keep comments as-is
+    }
+
+    QString appDir = QCoreApplication::applicationDirPath();
+
+    // 1. Expand %APPDIR% if present
+    if (cmd.contains("%APPDIR%", Qt::CaseInsensitive)) {
+#ifdef Q_OS_WIN
+        cmd.replace("%APPDIR%", QDir::toNativeSeparators(appDir), Qt::CaseInsensitive);
+#else
+        cmd.replace("%APPDIR%", appDir, Qt::CaseInsensitive);
+#endif
+    }
+
+#ifdef Q_OS_WIN
+    // 2. Parse executable and argument parts
+    QString exePart;
+    QString rest;
+    bool isQuoted = false;
+
+    if (cmd.startsWith('"')) {
+        int endQ = cmd.indexOf('"', 1);
+        if (endQ != -1) {
+            exePart = cmd.mid(1, endQ - 1);
+            rest = cmd.mid(endQ + 1);
+            isQuoted = true;
+        } else {
+            exePart = cmd.mid(1);
+            rest = "";
+        }
+    } else {
+        int spaceIdx = cmd.indexOf(' ');
+        if (spaceIdx != -1) {
+            exePart = cmd.left(spaceIdx);
+            rest = cmd.mid(spaceIdx);
+        } else {
+            exePart = cmd;
+            rest = "";
+        }
+    }
+
+    // Candidate relative paths for each compiler/toolchain
+    QStringList candidates;
+    if (ext.compare(".cpp", Qt::CaseInsensitive) == 0 || exePart.contains("g++", Qt::CaseInsensitive)) {
+        candidates = {"GCC/bin/g++.exe", "ucrt64/bin/g++.exe", "mingw64/bin/g++.exe", "bin/g++.exe"};
+    } else if (ext.compare(".c", Qt::CaseInsensitive) == 0 || exePart.contains("gcc", Qt::CaseInsensitive)) {
+        candidates = {"GCC/bin/gcc.exe", "ucrt64/bin/gcc.exe", "mingw64/bin/gcc.exe", "bin/gcc.exe"};
+    } else if (ext.compare(".pas", Qt::CaseInsensitive) == 0 || ext.compare(".pp", Qt::CaseInsensitive) || exePart.contains("fpc", Qt::CaseInsensitive)) {
+        candidates = {"FPC/bin/i386-win32/fpc.exe", "FPC/bin/x86_64-win64/fpc.exe", "FPC/bin/fpc.exe", "bin/fpc.exe"};
+    } else if (ext.compare(".py", Qt::CaseInsensitive) == 0 || exePart.contains("python", Qt::CaseInsensitive)) {
+        candidates = {"PYTHON/python.exe", "python.exe"};
+    } else if (ext.compare(".java", Qt::CaseInsensitive) == 0 || exePart.contains("javac", Qt::CaseInsensitive)) {
+        candidates = {"JDK/bin/javac.exe", "bin/javac.exe"};
+    }
+
+    bool exists = QFile::exists(exePart);
+
+    // If it points to an old nonexistent path or contains ucrt64 that no longer exists
+    if (!exists || (exePart.contains("ucrt64", Qt::CaseInsensitive) && !QFile::exists(exePart))) {
+        QString foundNewExe;
+
+        // Try to match relative directory inside appDir (e.g. /GCC/, /FPC/, /JDK/, /PYTHON/)
+        QString normExe = exePart;
+        normExe.replace('\\', '/');
+        for (const QString &prefix : {"/GCC/", "/FPC/", "/JDK/", "/PYTHON/", "/ucrt64/", "/mingw64/"}) {
+            int idx = normExe.indexOf(prefix, 0, Qt::CaseInsensitive);
+            if (idx != -1) {
+                QString rel = normExe.mid(idx + 1);
+                // Map ucrt64 to GCC if ucrt64 doesn't exist
+                if (rel.startsWith("ucrt64/", Qt::CaseInsensitive) && !QFile::exists(appDir + "/" + rel)) {
+                    rel.replace(0, 6, "GCC");
+                }
+                if (QFile::exists(appDir + "/" + rel)) {
+                    foundNewExe = QDir::toNativeSeparators(appDir + "/" + rel);
+                    break;
+                }
+            }
+        }
+
+        // Try candidate subpaths in appDir
+        if (foundNewExe.isEmpty()) {
+            for (const QString &sub : candidates) {
+                if (QFile::exists(appDir + "/" + sub)) {
+                    foundNewExe = QDir::toNativeSeparators(appDir + "/" + sub);
+                    break;
+                }
+            }
+        }
+
+        // Try standard system locations
+        if (foundNewExe.isEmpty()) {
+            QStringList sysDirs = {
+                "C:/Program Files (x86)/Themis",
+                "C:/Program Files/Themis",
+                "C:/Themis",
+                "C:/MinGW",
+                "C:/msys64/ucrt64",
+                "C:/msys64/mingw64",
+                "C:/TDM-GCC-64"
+            };
+            for (const QString &sys : sysDirs) {
+                for (const QString &sub : candidates) {
+                    QString full = sys + "/" + sub;
+                    if (QFile::exists(full)) {
+                        foundNewExe = QDir::toNativeSeparators(full);
+                        break;
+                    }
+                }
+                if (!foundNewExe.isEmpty()) break;
+            }
+        }
+
+        // Try system PATH
+        if (foundNewExe.isEmpty()) {
+            QString exeName = QFileInfo(exePart).fileName();
+            if (exeName.isEmpty() && !candidates.isEmpty()) exeName = QFileInfo(candidates.first()).fileName();
+            if (!exeName.isEmpty()) {
+                QString inPath = QStandardPaths::findExecutable(exeName);
+                if (!inPath.isEmpty()) {
+                    foundNewExe = QDir::toNativeSeparators(inPath);
+                }
+            }
+        }
+
+        if (!foundNewExe.isEmpty()) {
+            exePart = foundNewExe;
+            isQuoted = true;
+        }
+    }
+
+    // Ensure C++ / C GCC on Windows includes -static flag so student .exe don't require external DLLs
+    if (ext.compare(".cpp", Qt::CaseInsensitive) == 0 && exePart.contains("g++", Qt::CaseInsensitive) && !rest.contains("-static")) {
+        rest = " -static" + rest;
+    }
+    if (ext.compare(".c", Qt::CaseInsensitive) == 0 && exePart.contains("gcc", Qt::CaseInsensitive) && !rest.contains("-static")) {
+        rest = " -static" + rest;
+    }
+
+    if (isQuoted || exePart.contains(' ')) {
+        return "\"" + QDir::toNativeSeparators(exePart) + "\"" + rest;
+    } else {
+        return QDir::toNativeSeparators(exePart) + rest;
+    }
+#else
+    Q_UNUSED(ext);
+    return cmd;
+#endif
+}
+
+bool CompilerConfigDialog::autoRelocateEntries(QList<CompilerEntry> &entries)
+{
+    bool changed = false;
+    for (CompilerEntry &e : entries) {
+        QString updated = autoRelocateCommand(e.command, e.ext);
+        if (updated != e.command) {
+            e.command = updated;
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 // ─── Constructor ─────────────────────────────────────────────────────────────
@@ -169,6 +337,18 @@ void CompilerConfigDialog::buildUI()
     QHBoxLayout *btnLay = new QHBoxLayout();
     QPushButton *btnHelp = new QPushButton("❓ Hướng dẫn");
     btnLay->addWidget(btnHelp);
+
+    QPushButton *btnReset = new QPushButton("🔄 Khôi phục mặc định");
+    btnLay->addWidget(btnReset);
+    connect(btnReset, &QPushButton::clicked, this, [this]() {
+        if (QMessageBox::question(this, "Khôi phục mặc định",
+            "Bạn có chắc chắn muốn khôi phục lại danh sách bộ dịch mặc định theo vị trí hiện tại của Themis?",
+            QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
+            m_entries = defaultEntries();
+            refreshTable();
+        }
+    });
+
     btnLay->addStretch();
     QDialogButtonBox *box = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -285,37 +465,57 @@ void CompilerConfigDialog::onBrowseExe()
     int row = m_table->currentRow();
     if (row < 0 || !isCompilerRow(row)) return;
 
-    QString startDir = "/usr/bin/";
-    QString title    = "Chọn chương trình dịch";
+    QString startDir;
+    QString title = "Chọn chương trình dịch";
+
+#ifdef Q_OS_WIN
+    startDir = QCoreApplication::applicationDirPath();
+    QString filter = "Chương trình thực thi (*.exe);;Tất cả các file (*.*)";
+#else
+    startDir = "/usr/bin/";
+    QString filter = "Executables (*);;All files (*)";
+#endif
 
     // For Python, look in common places
     if (isPythonRow(row)) {
         title = "Chọn trình thông dịch Python";
-        startDir = "/usr/bin/";
+#ifdef Q_OS_WIN
+        if (QFile::exists(startDir + "/PYTHON/python.exe")) {
+            startDir = startDir + "/PYTHON";
+        }
+#endif
     }
 
-    QString path = QFileDialog::getOpenFileName(
-        this, title, startDir,
-        "Executables (*);;All files (*)");
+    QString path = QFileDialog::getOpenFileName(this, title, startDir, filter);
     if (path.isEmpty()) return;
+
+#ifdef Q_OS_WIN
+    path = QDir::toNativeSeparators(path);
+#endif
+    QString quotePath = path.contains(' ') ? ("\"" + path + "\"") : path;
 
     // For Python: just store the interpreter path
     // For others: replace the executable in the existing command line
     QString currentCmd = m_table->item(row, 1)->text();
     if (isPythonRow(row)) {
-        // Python: just the interpreter path, we wrap it at judge time
-        m_table->item(row, 1)->setText(path);
-        m_entries[row].command = path;
+        m_table->item(row, 1)->setText(quotePath);
+        m_entries[row].command = quotePath;
     } else {
-        // For other compilers: replace the first token (the exe) in the command
-        // with the new selected path
-        QStringList parts = currentCmd.split(' ', Qt::SkipEmptyParts);
-        if (!parts.isEmpty()) {
-            parts[0] = path;
-            QString newCmd = parts.join(' ');
-            m_table->item(row, 1)->setText(newCmd);
-            m_entries[row].command = newCmd;
+        QString rest;
+        if (currentCmd.trimmed().startsWith('"')) {
+            int endQ = currentCmd.indexOf('"', currentCmd.indexOf('"') + 1);
+            if (endQ != -1) {
+                rest = currentCmd.mid(endQ + 1);
+            }
+        } else {
+            int spaceIdx = currentCmd.indexOf(' ');
+            if (spaceIdx != -1) {
+                rest = currentCmd.mid(spaceIdx);
+            }
         }
+        QString newCmd = quotePath + rest;
+        m_table->item(row, 1)->setText(newCmd);
+        m_entries[row].command = newCmd;
     }
 }
 
@@ -377,4 +577,9 @@ void CompilerConfigDialog::accept()
 }
 
 QList<CompilerEntry> CompilerConfigDialog::entries() const { return m_entries; }
-void CompilerConfigDialog::setEntries(const QList<CompilerEntry> &e) { m_entries = e; refreshTable(); }
+void CompilerConfigDialog::setEntries(const QList<CompilerEntry> &e)
+{
+    m_entries = e;
+    autoRelocateEntries(m_entries);
+    refreshTable();
+}

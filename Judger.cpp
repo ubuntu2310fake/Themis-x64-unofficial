@@ -43,7 +43,11 @@ bool Judger::compile(const QString &sourceFile,
 
     // Replace Themis variables
     QString cmd = entry.command;
+#ifdef Q_OS_WIN
+    cmd.replace("%APPDIR%", QDir::toNativeSeparators(QCoreApplication::applicationDirPath()), Qt::CaseInsensitive);
+#else
     cmd.replace("%APPDIR%", QCoreApplication::applicationDirPath(), Qt::CaseInsensitive);
+#endif
     cmd.replace("%PATH%", pathDir, Qt::CaseInsensitive);
     cmd.replace("%NAME%", taskName, Qt::CaseInsensitive);
     cmd.replace("%EXT%",  ext,      Qt::CaseInsensitive);
@@ -63,6 +67,15 @@ bool Judger::compile(const QString &sourceFile,
     QString prog = parts[0];
 #ifdef Q_OS_WIN
     prog = QDir::toNativeSeparators(prog);
+    if (!QFile::exists(prog)) {
+        // Auto-heal on the fly if binary path is missing
+        QString relocated = CompilerConfigDialog::autoRelocateCommand(parts.join(' '), entry.ext);
+        QStringList relParts = QProcess::splitCommand(relocated);
+        if (!relParts.isEmpty() && QFile::exists(relParts[0])) {
+            prog = QDir::toNativeSeparators(relParts[0]);
+            parts = relParts;
+        }
+    }
 #endif
 
     QProcess proc;

@@ -24,9 +24,20 @@ TestResult Judger::execute(const QString &exeFile,
     
     QString cmdLine;
     if (!interpreter.isEmpty()) {
-        cmdLine = "\"" + interpreter + "\" \"" + exeFile + "\"";
+        QString interp = interpreter.trimmed();
+        interp.replace("%APPDIR%", QDir::toNativeSeparators(QCoreApplication::applicationDirPath()), Qt::CaseInsensitive);
+        if (interp.startsWith('"') && interp.endsWith('"') && interp.length() >= 2) {
+            interp = interp.mid(1, interp.length() - 2);
+        }
+        if (!QFile::exists(interp)) {
+            QString appDir = QCoreApplication::applicationDirPath();
+            if (QFile::exists(appDir + "/PYTHON/python.exe")) {
+                interp = appDir + "/PYTHON/python.exe";
+            }
+        }
+        cmdLine = "\"" + QDir::toNativeSeparators(interp) + "\" \"" + QDir::toNativeSeparators(exeFile) + "\"";
     } else {
-        cmdLine = "\"" + exeFile + "\"";
+        cmdLine = "\"" + QDir::toNativeSeparators(exeFile) + "\"";
     }
 
     SECURITY_ATTRIBUTES sa;

@@ -21,6 +21,8 @@ public:
     ~CompilerConfigDialog() {}
 
     static QList<CompilerEntry> defaultEntries();
+    static QString autoRelocateCommand(const QString &command, const QString &ext);
+    static bool autoRelocateEntries(QList<CompilerEntry> &entries);
 
     QList<CompilerEntry> entries() const;
     void setEntries(const QList<CompilerEntry> &entries);

@@ -62,28 +62,8 @@ MainWindow::MainWindow(QWidget *parent)
     }
     settings.endArray();
 
-    // Auto-heal outdated/broken compiler paths (e.g. ucrt64 on Windows systems where Themis uses GCC)
-    bool needsSave = false;
-    QString appDir = QCoreApplication::applicationDirPath();
-    for (CompilerEntry &e : m_compilerEntries) {
-        if (e.command.contains("ucrt64", Qt::CaseInsensitive)) {
-            if (!QFile::exists(appDir + "/ucrt64/bin/g++.exe")) {
-                if (QFile::exists(appDir + "/GCC/bin/g++.exe")) {
-                    e.command.replace("ucrt64", "GCC", Qt::CaseInsensitive);
-                    needsSave = true;
-                } else {
-                    for (const auto &def : CompilerConfigDialog::defaultEntries()) {
-                        if (def.ext.compare(e.ext, Qt::CaseInsensitive) == 0) {
-                            e.command = def.command;
-                            needsSave = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if (needsSave) {
+    // Auto-relocate and self-heal any compiler paths (e.g. moved directory, %APPDIR%, old install paths)
+    if (CompilerConfigDialog::autoRelocateEntries(m_compilerEntries) || size == 0) {
         settings.beginWriteArray("Compilers");
         for (int i = 0; i < m_compilerEntries.size(); ++i) {
             settings.setArrayIndex(i);
@@ -633,7 +613,10 @@ void MainWindow::onExportExcel()
 void MainWindow::onCompilerConfig()
 {
     CompilerConfigDialog dlg(this);
-    if (!m_compilerEntries.isEmpty()) dlg.setEntries(m_compilerEntries);
+    if (!m_compilerEntries.isEmpty()) {
+        CompilerConfigDialog::autoRelocateEntries(m_compilerEntries);
+        dlg.setEntries(m_compilerEntries);
+    }
     if (dlg.exec() == QDialog::Accepted) {
         m_compilerEntries = dlg.entries();
         
